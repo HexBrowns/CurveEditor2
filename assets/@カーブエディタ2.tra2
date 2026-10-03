@@ -1,0 +1,1288 @@
+-- ============================================================================
+-- @カーブエディタ2.tra2  v1.10 by HexBrowns
+-- CurveEditor2 専用トラックバー移動スクリプト（ScriptCurve とは独立）
+-- 正本: AI/plugins/CurveEditor2/assets/@カーブエディタ2.tra2（build.ps1 が Script/CurveEditor2/ へ配置する）
+-- ============================================================================
+--
+-- 【セクション一覧】
+--   カーブエディタ2              ← Live スロット連携（CurveEditor2.aux2）。区間ごとに同じカーブ
+--   区間ごとにスロットを進める    ← 同上。中間点で区切った k 番目の区間は スロット + k（k は 0 始まり）。v1.10
+--   全体で1本                    ← 同上。開始点から終了点までの時間に 1 本のカーブを掛け、中間点の値は直線でつなぐ。v1.10
+--   バウンス
+--   ループバウンス      ← 周期(フレーム)を設定。開始値～終了値を減衰なしで無限ループ
+--   弾性
+--   バック
+--   ベジェ
+--   サイン
+--   指数アウト
+--   ステップ            ← 段数を設定
+--   スプリング          ← 減衰比・角周波数を設定
+--   パーリン揺らぎ      ← オクターブ・周波数を設定
+--   （v1.10 で「加減速」セクションを外した。実制作での使用 0 件で、
+--     カーブエディタ2 の加速・減速と役目が重なるため）
+--
+-- 【ライブプレビューの使い方】
+--   1. CurveEditor2 (表示メニュー) を開く
+--   2. コードを入力し「Live」チェックをON
+--   3. トラックバーの移動スクリプトで カーブエディタ2 を選択
+--   → エディタの編集内容がリアルタイムで補間に反映される
+--
+-- 【Live の 3 つのセクションのトラック設定】（v1.10）
+--   スロット : Live スロット番号（設定値はこの 1 つだけ。v1.0 のトラックと数を合わせるため）
+--   加速・減速 : どちらも OFF / 加速だけ ON = カーブそのまま
+--              減速だけ ON = カーブを点対称に折り返す（イン と アウト が入れ替わる）
+--              両方 ON = 前半そのまま・後半を折り返したインアウト
+--   時間制御 : 区間ごと の 2 つは区間ごとに、全体で1本 は全体に掛かる
+--
+-- 【カーブエディタ2 で使える定数・関数】（CurveEditor2 に入力するコード内）
+--
+--   t        : 補間位置（0.0=開始 ～ 1.0=終了）。戻り値は比率（0.0=st / 1.0=ed）
+--   st, ed   : その区間の開始値・終了値（v1.10。加速・減速で折り返したときは入れ替わる）
+--              全体で1本 では開始点と終了点の値
+--   index    : 区間番号（0 始まり）  num : 開始・中間・終了点の総数  slot : 評価中のスロット
+--   pi, tau, e, inf
+--   abs, floor, ceil, sqrt, sin, cos, tan, atan, atan2
+--   exp, log, fmod, max, min
+--
+--   clamp(v,lo,hi)   lerp/mix(a,b,t)   round(x)   fract(x)
+--   sign(x)          map(v,a,b,c,d)    wrap(v,lo,hi)   snap(v,step)
+--   smoothstep(e0,e1,x)   smootherstep(e0,e1,x)
+--   triangle(t)   pingpong(t)   saw(t)   square(t[,duty])
+--   ease_in(t[,n])   ease_out(t[,n])   ease_inout(t[,n])
+--   sine_in(t)   sine_out(t)   sine_inout(t)
+--   expo_in(t)   expo_out(t)   circ_in(t)   circ_out(t)
+--   bounce(t)   bounce_in(t)
+--   elastic(t[,a,p])   elastic_in(t[,a,p])
+--   back(t[,s])   back_in(t[,s])
+--   steps(t[,n[,mode]])
+--   bezier(t,x1,y1,x2,y2)
+--   spring(t[,zeta,omega])
+--   perlin(t[,octaves,freq])
+--   log_ratio(t[,origin])  対数補間（Basic_S の 対数補間 と同じ値）になる比率。v1.10
+--                          st と ed が同符号でないとき・どちらかが原点のとき・等しいときは t を返す
+--   to_ratio(v)            値 v を比率に直す（ed == st のときは 0）。v1.10
+--
+-- 【注意】
+--   ・obj.w / obj.h はオブジェクト寸法にならない（screen サイズ相当の値になる）。
+--   ・obj.getvalue() / obj.rand1() 等の未対応メソッドを呼ぶと C++ 例外になり得る
+--     （Lua の pcall では捕捉できない）。利用者責任で呼ばないこと。
+--   ・このコメント内で行頭にアットマークを置かないこと（マルチセクションの区切りになる）。
+--
+-- ============================================================================
+
+@カーブエディタ2
+--label:HexScript
+--information:カーブエディタ2@カーブエディタ2 v1.10 by HexBrowns
+--param:スロット,1
+--speed:0,0
+--timecontrol
+
+-- トラック値の設定欄は「加減速|スロット|時間制御」の順に保存される
+-- （実物: バネ振動@Basic_S の 2|1,0.2|0,0,0.499164,0）。v1.0 の「0|スロット」は
+-- 加速・減速なし・時間制御なし と読めて、見た目は変わらない。
+-- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
+-- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
+-- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+
+local _getpoint = obj.getpoint
+local _n = _getpoint("num")
+-- 区間の扱い（0 = 区間ごとに同じカーブ / 1 = 区間ごとにスロットを進める / 2 = 全体で1本）
+local _mode = 0
+local _slot = math.max(1, math.floor(tonumber((_getpoint("param"))) or 1))
+local _accel = _getpoint("accelerate")
+local _decel = _getpoint("decelerate")
+_accel = (_accel == true or _accel == 1)
+_decel = (_decel == true or _decel == 1)
+
+-- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
+-- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
+local _C = CurveEditor2_tra2_cache
+if type(_C) ~= "table" then
+  _C = { content = false, fns = {}, errors = {}, error_count = 0 }
+  CurveEditor2_tra2_cache = _C
+end
+
+-- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
+-- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
+local _bfile = _C.live_path
+if not _bfile then
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  local _ok, _sp = pcall(obj.getinfo, "script_path")
+  if _ok and type(_sp) == "string" then
+    local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
+      or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
+    if _root then
+      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+    end
+  end
+  _C.live_path = _bfile
+end
+local _content = ""
+local _pf = io.open(_bfile, "r")
+if _pf then
+  _content = _pf:read("*a") or ""
+  _pf:close()
+end
+
+-- 同じスロット・同じ内容のエラーは 1 回だけ出す（式を直して Live が変われば出し直す）
+local function _report(slot, msg)
+  local key = slot .. "\n" .. msg
+  if _C.errors[key] or _C.error_count >= 16 then return end
+  _C.errors[key] = true
+  _C.error_count = _C.error_count + 1
+  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+end
+
+-- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
+-- ヘルパーは st / ed などを上位値で読む
+local _PRELUDE = [==[
+local obj, st, ed, index, num, slot
+local pi,tau,e=math.pi,math.pi*2,2.718281828459045
+local abs,floor,ceil,sqrt=math.abs,math.floor,math.ceil,math.sqrt
+local sin,cos,tan=math.sin,math.cos,math.tan
+local atan,atan2=math.atan,math.atan2
+local exp,log,fmod=math.exp,math.log,math.fmod
+local max,min=math.max,math.min
+local inf=math.huge
+local function clamp(v,lo,hi)return max(lo,min(hi,v))end
+local function lerp(a,b,t)return a+(b-a)*t end
+local mix=lerp
+local function round(x)return floor(x+0.5)end
+local function fract(x)return x-floor(x)end
+local function sign(x)return x>0 and 1 or x<0 and -1 or 0 end
+local function map(v,a,b,c,d)return c+(d-c)*(v-a)/(b-a)end
+local function wrap(v,lo,hi)local r=hi-lo;return lo+fmod(fmod(v-lo,r)+r,r)end
+local function snap(v,step)return floor(v/step+0.5)*step end
+local function smoothstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*(3-2*t)
+end
+local function smootherstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*t*(t*(6*t-15)+10)
+end
+local function triangle(t)return 1-abs(t*2-1)end
+local function pingpong(t)t=fract(t*.5)*2;return t<1 and t or 2-t end
+local function saw(t)return fract(t)end
+local function square(t,duty)return fract(t)<(duty or .5) and 1 or 0 end
+local function ease_in(t,n)return t^(n or 2)end
+local function ease_out(t,n)return 1-(1-t)^(n or 2)end
+local function ease_inout(t,n)
+  n=n or 2;return t<.5 and(2*t)^n/2 or 1-(2-2*t)^n/2
+end
+local function sine_in(t)return 1-cos(t*pi/2)end
+local function sine_out(t)return sin(t*pi/2)end
+local function sine_inout(t)return(1-cos(pi*t))/2 end
+local function expo_in(t)return t==0 and 0 or 2^(10*t-10)end
+local function expo_out(t)return t==1 and 1 or 1-2^(-10*t)end
+local function circ_in(t)return 1-sqrt(1-t*t)end
+local function circ_out(t)t=t-1;return sqrt(1-t*t)end
+local function _b(t)
+  if t<1/2.75 then return 7.5625*t*t
+  elseif t<2/2.75 then t=t-1.5/2.75;return 7.5625*t*t+.75
+  elseif t<2.5/2.75 then t=t-2.25/2.75;return 7.5625*t*t+.9375
+  else t=t-2.625/2.75;return 7.5625*t*t+.984375 end
+end
+local function bounce(t)return _b(t)end
+local function bounce_in(t)return 1-_b(1-t)end
+local function elastic(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p=a or 1,p or .3
+  return a*2^(-10*t)*sin((t-p/4)*pi*2/p)+1
+end
+local function elastic_in(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p,t=a or 1,p or .3,t-1
+  return-(a*2^(10*t)*sin((t-p/4)*pi*2/p))
+end
+local function back(t,s)
+  s=s or 1.70158;t=t-1;return t*t*((s+1)*t+s)+1
+end
+local function back_in(t,s)
+  s=s or 1.70158;return t*t*((s+1)*t-s)
+end
+local function steps(t,n,mode)
+  n=n or 10
+  return mode=="start" and ceil(t*n)/n or floor(t*n)/n
+end
+local function bezier(t,x1,y1,x2,y2)
+  local function bx(s)return 3*s*(1-s)^2*x1+3*s^2*(1-s)*x2+s^3 end
+  local function by(s)return 3*s*(1-s)^2*y1+3*s^2*(1-s)*y2+s^3 end
+  local lo,hi,s=0,1,t
+  for _=1,25 do
+    local x=bx(s)
+    if abs(x-t)<1e-7 then break end
+    if x<t then lo=s else hi=s end
+    s=(lo+hi)*.5
+  end
+  return by(s)
+end
+local function spring(t,zeta,omega)
+  zeta=zeta or 0.5;omega=omega or 10.0
+  if t<=0 then return 0 end
+  if t>=1 then return 1 end
+  if zeta<0 then zeta=0 end
+  if omega<=0 then return t end
+  local tp
+  if zeta<1e-6 then tp=t*(2*pi/omega)
+  else tp=t*(4.605/(zeta*omega))end
+  if zeta<1-1e-6 then
+    local wd=omega*sqrt(1-zeta*zeta)
+    local env=exp(-zeta*omega*tp)
+    return 1-env*(cos(wd*tp)+(zeta/sqrt(1-zeta*zeta))*sin(wd*tp))
+  elseif zeta<1+1e-6 then
+    return 1-exp(-omega*tp)*(1+omega*tp)
+  else
+    local s=sqrt(zeta*zeta-1)
+    local r1=-omega*(zeta-s);local r2=-omega*(zeta+s)
+    local A=r2/(r1-r2);local B=-r1/(r1-r2)
+    return 1+A*exp(r1*tp)+B*exp(r2*tp)
+  end
+end
+local _P={151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,
+  140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,
+  247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,
+  57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,
+  74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,
+  60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,
+  65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,
+  200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,
+  52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,
+  207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,
+  119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,
+  129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,
+  218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,
+  81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,
+  184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,
+  222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180}
+local function _fd(x)return x*x*x*(x*(x*6-15)+10)end
+local function _n1(x)
+  local X=floor(x)%256;local f=x-floor(x);local u=_fd(f)
+  local a=(_P[X+1]%2==1)and f or -f
+  local b=(_P[(X+1)%256+1]%2==1)and(f-1)or-(f-1)
+  return a+u*(b-a)
+end
+local function perlin(t,octaves,freq)
+  local oc=max(1,min(16,floor(octaves or 4)))
+  local fr=(freq and freq>0)and freq or 4.0
+  local r,amp,tot,f=0,1,0,fr
+  for _=1,oc do r=r+_n1(t*f)*amp;tot=tot+amp;amp=amp*.5;f=f*2 end
+  return r/tot
+end
+local function to_ratio(v)
+  local d = ed - st
+  if d == 0 then return 0 end
+  return (v - st) / d
+end
+local function log_ratio(t, origin)
+  origin = origin or 0
+  local a, b = st - origin, ed - origin
+  if a == 0 or b == 0 or (a > 0) ~= (b > 0) or a == b then return t end
+  return (a * (b / a) ^ t - a) / (b - a)
+end
+return function(_t, _obj, _st, _ed, _index, _num, _slot)
+obj, st, ed, index, num, slot = _obj, _st, _ed, _index, _num, _slot
+local t = _t
+]==]
+
+-- Live の内容かこのスクリプト自身（_PRELUDE）が変わったら作り直す。
+-- LuaJIT の文字列は内部化されているので、この比較は長さによらず安い
+if _content ~= _C.content or _PRELUDE ~= _C.prelude then
+  _C.content = _content
+  _C.prelude = _PRELUDE
+  _C.prelude_lines = select(2, _PRELUDE:gsub("\n", "\n"))
+  _C.fns = {}
+  _C.errors = {}
+  _C.error_count = 0
+end
+
+-- エラーの行番号を式の中の行に直す
+local function _user_line(msg)
+  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+    return (tonumber(l) - _C.prelude_lines) .. " 行目:"
+  end))
+end
+
+local function _get_fn(slot)
+  local fn = _C.fns[slot]
+  if fn ~= nil then return fn end
+  local code = "return t"
+  local mk = "@.live." .. tostring(slot) .. "\n"
+  local cs
+  if _content:sub(1, #mk) == mk then
+    cs = #mk + 1
+  else
+    local si = _content:find("\n" .. mk, 1, true)
+    if si then cs = si + 1 + #mk end
+  end
+  if cs then
+    local ns = _content:find("\n@", cs, true)
+    local s = ns and _content:sub(cs, ns - 1) or _content:sub(cs)
+    if s:match("%S") then code = s end
+  end
+  -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
+  code = code:gsub("%s+$", "")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  if chunk then
+    local ok, made = pcall(chunk)
+    if ok and type(made) == "function" then
+      fn = made
+    else
+      fn = false
+      _report(slot, _user_line(made))
+    end
+  else
+    fn = false
+    _report(slot, "構文エラー: " .. _user_line(err))
+  end
+  _C.fns[slot] = fn
+  return fn
+end
+
+-- 式の戻り値（比率）。エラーや数値でない戻り値は t（直線）にする
+local function _ratio(slot, t, st, ed, index)
+  local fn = _get_fn(slot)
+  if not fn then return t end
+  local ok, v = pcall(fn, t, obj, st, ed, index, _n, slot)
+  if ok then
+    if type(v) == "number" then return v end
+    return t
+  end
+  _report(slot, _user_line(v))
+  return t
+end
+
+-- 加速・減速の折り返し（@Basic_S の reduce_inout_ease と同じ考え方。ただし
+-- どちらも OFF は「そのまま」にして v1.0 のトラックの見た目を保つ）。
+-- 戻り値は v0 から v1 への比率で、式には折り返した向きの st / ed を見せる
+local function _shaped_ratio(slot, t, v0, v1, index)
+  if _accel and _decel then
+    local mid = (v0 + v1) / 2
+    if t < 0.5 then
+      return 0.5 * _ratio(slot, 2 * t, v0, mid, index)
+    end
+    return 1 - 0.5 * _ratio(slot, 2 - 2 * t, v1, mid, index)
+  elseif _decel then
+    return 1 - _ratio(slot, 1 - t, v1, v0, index)
+  end
+  return _ratio(slot, t, v0, v1, index)
+end
+
+if _n < 2 then
+  return _getpoint(0)
+end
+
+if _mode == 2 then
+  -- 全体で1本: 全体の時間位置にカーブを掛けて時間を歪め、歪めた時間での値を中間点から直線で取る
+  local _u = _getpoint("timecontrol", "value")
+  local _R = _shaped_ratio(_slot, _u, _getpoint(0), _getpoint(_n - 1), 0)
+  local _tt = _R * _getpoint("time", _n - 1)
+  local _k = 0
+  while _k < _n - 2 and _getpoint("time", _k + 1) <= _tt do
+    _k = _k + 1
+  end
+  local _t0, _t1 = _getpoint("time", _k), _getpoint("time", _k + 1)
+  local _s = (_t1 > _t0) and (_tt - _t0) / (_t1 - _t0) or 1
+  local _v0, _v1 = _getpoint(_k), _getpoint(_k + 1)
+  return _v0 + (_v1 - _v0) * _s
+end
+
+local _idx, _t = math.modf(_getpoint("index"))
+-- キーフレームちょうど（小数部=0）では次区間の始点として t=0 になる。
+-- そのままだと _st がキー値になり、曲線の終点 y≠1（例: 弧で y3=0）のとき
+-- 直前フレーム（t→1）から終了キー値へ飛ぶ。直前区間の t=1 として評価する。
+if _t == 0 and _idx > 0 then
+  _idx = _idx - 1
+  _t = 1
+end
+if _idx >= _n - 1 then
+  _idx, _t = _n - 2, 1
+elseif _idx < 0 then
+  _idx, _t = 0, 0
+end
+-- 時間制御は区間ごとに掛ける（@Basic_S の 区間ごとに時間制御 と同じ取り方）
+_t = _getpoint("timecontrol", "value", _t * _getpoint("time", _n - 1))
+
+local _st = _getpoint(_idx)
+local _ed = _getpoint(_idx + 1)
+local _use = (_mode == 1) and (_slot + _idx) or _slot
+return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
+
+@区間ごとにスロットを進める
+--label:HexScript
+--information:区間ごとにスロットを進める@カーブエディタ2 v1.10 by HexBrowns
+--param:スロット,1
+--speed:0,0
+--timecontrol
+
+-- トラック値の設定欄は「加減速|スロット|時間制御」の順に保存される
+-- （実物: バネ振動@Basic_S の 2|1,0.2|0,0,0.499164,0）。v1.0 の「0|スロット」は
+-- 加速・減速なし・時間制御なし と読めて、見た目は変わらない。
+-- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
+-- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
+-- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+
+local _getpoint = obj.getpoint
+local _n = _getpoint("num")
+-- 区間の扱い（0 = 区間ごとに同じカーブ / 1 = 区間ごとにスロットを進める / 2 = 全体で1本）
+local _mode = 1
+local _slot = math.max(1, math.floor(tonumber((_getpoint("param"))) or 1))
+local _accel = _getpoint("accelerate")
+local _decel = _getpoint("decelerate")
+_accel = (_accel == true or _accel == 1)
+_decel = (_decel == true or _decel == 1)
+
+-- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
+-- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
+local _C = CurveEditor2_tra2_cache
+if type(_C) ~= "table" then
+  _C = { content = false, fns = {}, errors = {}, error_count = 0 }
+  CurveEditor2_tra2_cache = _C
+end
+
+-- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
+-- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
+local _bfile = _C.live_path
+if not _bfile then
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  local _ok, _sp = pcall(obj.getinfo, "script_path")
+  if _ok and type(_sp) == "string" then
+    local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
+      or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
+    if _root then
+      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+    end
+  end
+  _C.live_path = _bfile
+end
+local _content = ""
+local _pf = io.open(_bfile, "r")
+if _pf then
+  _content = _pf:read("*a") or ""
+  _pf:close()
+end
+
+-- 同じスロット・同じ内容のエラーは 1 回だけ出す（式を直して Live が変われば出し直す）
+local function _report(slot, msg)
+  local key = slot .. "\n" .. msg
+  if _C.errors[key] or _C.error_count >= 16 then return end
+  _C.errors[key] = true
+  _C.error_count = _C.error_count + 1
+  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+end
+
+-- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
+-- ヘルパーは st / ed などを上位値で読む
+local _PRELUDE = [==[
+local obj, st, ed, index, num, slot
+local pi,tau,e=math.pi,math.pi*2,2.718281828459045
+local abs,floor,ceil,sqrt=math.abs,math.floor,math.ceil,math.sqrt
+local sin,cos,tan=math.sin,math.cos,math.tan
+local atan,atan2=math.atan,math.atan2
+local exp,log,fmod=math.exp,math.log,math.fmod
+local max,min=math.max,math.min
+local inf=math.huge
+local function clamp(v,lo,hi)return max(lo,min(hi,v))end
+local function lerp(a,b,t)return a+(b-a)*t end
+local mix=lerp
+local function round(x)return floor(x+0.5)end
+local function fract(x)return x-floor(x)end
+local function sign(x)return x>0 and 1 or x<0 and -1 or 0 end
+local function map(v,a,b,c,d)return c+(d-c)*(v-a)/(b-a)end
+local function wrap(v,lo,hi)local r=hi-lo;return lo+fmod(fmod(v-lo,r)+r,r)end
+local function snap(v,step)return floor(v/step+0.5)*step end
+local function smoothstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*(3-2*t)
+end
+local function smootherstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*t*(t*(6*t-15)+10)
+end
+local function triangle(t)return 1-abs(t*2-1)end
+local function pingpong(t)t=fract(t*.5)*2;return t<1 and t or 2-t end
+local function saw(t)return fract(t)end
+local function square(t,duty)return fract(t)<(duty or .5) and 1 or 0 end
+local function ease_in(t,n)return t^(n or 2)end
+local function ease_out(t,n)return 1-(1-t)^(n or 2)end
+local function ease_inout(t,n)
+  n=n or 2;return t<.5 and(2*t)^n/2 or 1-(2-2*t)^n/2
+end
+local function sine_in(t)return 1-cos(t*pi/2)end
+local function sine_out(t)return sin(t*pi/2)end
+local function sine_inout(t)return(1-cos(pi*t))/2 end
+local function expo_in(t)return t==0 and 0 or 2^(10*t-10)end
+local function expo_out(t)return t==1 and 1 or 1-2^(-10*t)end
+local function circ_in(t)return 1-sqrt(1-t*t)end
+local function circ_out(t)t=t-1;return sqrt(1-t*t)end
+local function _b(t)
+  if t<1/2.75 then return 7.5625*t*t
+  elseif t<2/2.75 then t=t-1.5/2.75;return 7.5625*t*t+.75
+  elseif t<2.5/2.75 then t=t-2.25/2.75;return 7.5625*t*t+.9375
+  else t=t-2.625/2.75;return 7.5625*t*t+.984375 end
+end
+local function bounce(t)return _b(t)end
+local function bounce_in(t)return 1-_b(1-t)end
+local function elastic(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p=a or 1,p or .3
+  return a*2^(-10*t)*sin((t-p/4)*pi*2/p)+1
+end
+local function elastic_in(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p,t=a or 1,p or .3,t-1
+  return-(a*2^(10*t)*sin((t-p/4)*pi*2/p))
+end
+local function back(t,s)
+  s=s or 1.70158;t=t-1;return t*t*((s+1)*t+s)+1
+end
+local function back_in(t,s)
+  s=s or 1.70158;return t*t*((s+1)*t-s)
+end
+local function steps(t,n,mode)
+  n=n or 10
+  return mode=="start" and ceil(t*n)/n or floor(t*n)/n
+end
+local function bezier(t,x1,y1,x2,y2)
+  local function bx(s)return 3*s*(1-s)^2*x1+3*s^2*(1-s)*x2+s^3 end
+  local function by(s)return 3*s*(1-s)^2*y1+3*s^2*(1-s)*y2+s^3 end
+  local lo,hi,s=0,1,t
+  for _=1,25 do
+    local x=bx(s)
+    if abs(x-t)<1e-7 then break end
+    if x<t then lo=s else hi=s end
+    s=(lo+hi)*.5
+  end
+  return by(s)
+end
+local function spring(t,zeta,omega)
+  zeta=zeta or 0.5;omega=omega or 10.0
+  if t<=0 then return 0 end
+  if t>=1 then return 1 end
+  if zeta<0 then zeta=0 end
+  if omega<=0 then return t end
+  local tp
+  if zeta<1e-6 then tp=t*(2*pi/omega)
+  else tp=t*(4.605/(zeta*omega))end
+  if zeta<1-1e-6 then
+    local wd=omega*sqrt(1-zeta*zeta)
+    local env=exp(-zeta*omega*tp)
+    return 1-env*(cos(wd*tp)+(zeta/sqrt(1-zeta*zeta))*sin(wd*tp))
+  elseif zeta<1+1e-6 then
+    return 1-exp(-omega*tp)*(1+omega*tp)
+  else
+    local s=sqrt(zeta*zeta-1)
+    local r1=-omega*(zeta-s);local r2=-omega*(zeta+s)
+    local A=r2/(r1-r2);local B=-r1/(r1-r2)
+    return 1+A*exp(r1*tp)+B*exp(r2*tp)
+  end
+end
+local _P={151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,
+  140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,
+  247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,
+  57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,
+  74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,
+  60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,
+  65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,
+  200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,
+  52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,
+  207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,
+  119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,
+  129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,
+  218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,
+  81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,
+  184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,
+  222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180}
+local function _fd(x)return x*x*x*(x*(x*6-15)+10)end
+local function _n1(x)
+  local X=floor(x)%256;local f=x-floor(x);local u=_fd(f)
+  local a=(_P[X+1]%2==1)and f or -f
+  local b=(_P[(X+1)%256+1]%2==1)and(f-1)or-(f-1)
+  return a+u*(b-a)
+end
+local function perlin(t,octaves,freq)
+  local oc=max(1,min(16,floor(octaves or 4)))
+  local fr=(freq and freq>0)and freq or 4.0
+  local r,amp,tot,f=0,1,0,fr
+  for _=1,oc do r=r+_n1(t*f)*amp;tot=tot+amp;amp=amp*.5;f=f*2 end
+  return r/tot
+end
+local function to_ratio(v)
+  local d = ed - st
+  if d == 0 then return 0 end
+  return (v - st) / d
+end
+local function log_ratio(t, origin)
+  origin = origin or 0
+  local a, b = st - origin, ed - origin
+  if a == 0 or b == 0 or (a > 0) ~= (b > 0) or a == b then return t end
+  return (a * (b / a) ^ t - a) / (b - a)
+end
+return function(_t, _obj, _st, _ed, _index, _num, _slot)
+obj, st, ed, index, num, slot = _obj, _st, _ed, _index, _num, _slot
+local t = _t
+]==]
+
+-- Live の内容かこのスクリプト自身（_PRELUDE）が変わったら作り直す。
+-- LuaJIT の文字列は内部化されているので、この比較は長さによらず安い
+if _content ~= _C.content or _PRELUDE ~= _C.prelude then
+  _C.content = _content
+  _C.prelude = _PRELUDE
+  _C.prelude_lines = select(2, _PRELUDE:gsub("\n", "\n"))
+  _C.fns = {}
+  _C.errors = {}
+  _C.error_count = 0
+end
+
+-- エラーの行番号を式の中の行に直す
+local function _user_line(msg)
+  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+    return (tonumber(l) - _C.prelude_lines) .. " 行目:"
+  end))
+end
+
+local function _get_fn(slot)
+  local fn = _C.fns[slot]
+  if fn ~= nil then return fn end
+  local code = "return t"
+  local mk = "@.live." .. tostring(slot) .. "\n"
+  local cs
+  if _content:sub(1, #mk) == mk then
+    cs = #mk + 1
+  else
+    local si = _content:find("\n" .. mk, 1, true)
+    if si then cs = si + 1 + #mk end
+  end
+  if cs then
+    local ns = _content:find("\n@", cs, true)
+    local s = ns and _content:sub(cs, ns - 1) or _content:sub(cs)
+    if s:match("%S") then code = s end
+  end
+  -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
+  code = code:gsub("%s+$", "")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  if chunk then
+    local ok, made = pcall(chunk)
+    if ok and type(made) == "function" then
+      fn = made
+    else
+      fn = false
+      _report(slot, _user_line(made))
+    end
+  else
+    fn = false
+    _report(slot, "構文エラー: " .. _user_line(err))
+  end
+  _C.fns[slot] = fn
+  return fn
+end
+
+-- 式の戻り値（比率）。エラーや数値でない戻り値は t（直線）にする
+local function _ratio(slot, t, st, ed, index)
+  local fn = _get_fn(slot)
+  if not fn then return t end
+  local ok, v = pcall(fn, t, obj, st, ed, index, _n, slot)
+  if ok then
+    if type(v) == "number" then return v end
+    return t
+  end
+  _report(slot, _user_line(v))
+  return t
+end
+
+-- 加速・減速の折り返し（@Basic_S の reduce_inout_ease と同じ考え方。ただし
+-- どちらも OFF は「そのまま」にして v1.0 のトラックの見た目を保つ）。
+-- 戻り値は v0 から v1 への比率で、式には折り返した向きの st / ed を見せる
+local function _shaped_ratio(slot, t, v0, v1, index)
+  if _accel and _decel then
+    local mid = (v0 + v1) / 2
+    if t < 0.5 then
+      return 0.5 * _ratio(slot, 2 * t, v0, mid, index)
+    end
+    return 1 - 0.5 * _ratio(slot, 2 - 2 * t, v1, mid, index)
+  elseif _decel then
+    return 1 - _ratio(slot, 1 - t, v1, v0, index)
+  end
+  return _ratio(slot, t, v0, v1, index)
+end
+
+if _n < 2 then
+  return _getpoint(0)
+end
+
+if _mode == 2 then
+  -- 全体で1本: 全体の時間位置にカーブを掛けて時間を歪め、歪めた時間での値を中間点から直線で取る
+  local _u = _getpoint("timecontrol", "value")
+  local _R = _shaped_ratio(_slot, _u, _getpoint(0), _getpoint(_n - 1), 0)
+  local _tt = _R * _getpoint("time", _n - 1)
+  local _k = 0
+  while _k < _n - 2 and _getpoint("time", _k + 1) <= _tt do
+    _k = _k + 1
+  end
+  local _t0, _t1 = _getpoint("time", _k), _getpoint("time", _k + 1)
+  local _s = (_t1 > _t0) and (_tt - _t0) / (_t1 - _t0) or 1
+  local _v0, _v1 = _getpoint(_k), _getpoint(_k + 1)
+  return _v0 + (_v1 - _v0) * _s
+end
+
+local _idx, _t = math.modf(_getpoint("index"))
+-- キーフレームちょうど（小数部=0）では次区間の始点として t=0 になる。
+-- そのままだと _st がキー値になり、曲線の終点 y≠1（例: 弧で y3=0）のとき
+-- 直前フレーム（t→1）から終了キー値へ飛ぶ。直前区間の t=1 として評価する。
+if _t == 0 and _idx > 0 then
+  _idx = _idx - 1
+  _t = 1
+end
+if _idx >= _n - 1 then
+  _idx, _t = _n - 2, 1
+elseif _idx < 0 then
+  _idx, _t = 0, 0
+end
+-- 時間制御は区間ごとに掛ける（@Basic_S の 区間ごとに時間制御 と同じ取り方）
+_t = _getpoint("timecontrol", "value", _t * _getpoint("time", _n - 1))
+
+local _st = _getpoint(_idx)
+local _ed = _getpoint(_idx + 1)
+local _use = (_mode == 1) and (_slot + _idx) or _slot
+return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
+
+@全体で1本
+--label:HexScript
+--information:全体で1本@カーブエディタ2 v1.10 by HexBrowns
+--param:スロット,1
+--speed:0,0
+--timecontrol
+
+-- トラック値の設定欄は「加減速|スロット|時間制御」の順に保存される
+-- （実物: バネ振動@Basic_S の 2|1,0.2|0,0,0.499164,0）。v1.0 の「0|スロット」は
+-- 加速・減速なし・時間制御なし と読めて、見た目は変わらない。
+-- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
+-- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
+-- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+
+local _getpoint = obj.getpoint
+local _n = _getpoint("num")
+-- 区間の扱い（0 = 区間ごとに同じカーブ / 1 = 区間ごとにスロットを進める / 2 = 全体で1本）
+local _mode = 2
+local _slot = math.max(1, math.floor(tonumber((_getpoint("param"))) or 1))
+local _accel = _getpoint("accelerate")
+local _decel = _getpoint("decelerate")
+_accel = (_accel == true or _accel == 1)
+_decel = (_decel == true or _decel == 1)
+
+-- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
+-- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
+local _C = CurveEditor2_tra2_cache
+if type(_C) ~= "table" then
+  _C = { content = false, fns = {}, errors = {}, error_count = 0 }
+  CurveEditor2_tra2_cache = _C
+end
+
+-- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
+-- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
+local _bfile = _C.live_path
+if not _bfile then
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  local _ok, _sp = pcall(obj.getinfo, "script_path")
+  if _ok and type(_sp) == "string" then
+    local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
+      or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
+    if _root then
+      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+    end
+  end
+  _C.live_path = _bfile
+end
+local _content = ""
+local _pf = io.open(_bfile, "r")
+if _pf then
+  _content = _pf:read("*a") or ""
+  _pf:close()
+end
+
+-- 同じスロット・同じ内容のエラーは 1 回だけ出す（式を直して Live が変われば出し直す）
+local function _report(slot, msg)
+  local key = slot .. "\n" .. msg
+  if _C.errors[key] or _C.error_count >= 16 then return end
+  _C.errors[key] = true
+  _C.error_count = _C.error_count + 1
+  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+end
+
+-- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
+-- ヘルパーは st / ed などを上位値で読む
+local _PRELUDE = [==[
+local obj, st, ed, index, num, slot
+local pi,tau,e=math.pi,math.pi*2,2.718281828459045
+local abs,floor,ceil,sqrt=math.abs,math.floor,math.ceil,math.sqrt
+local sin,cos,tan=math.sin,math.cos,math.tan
+local atan,atan2=math.atan,math.atan2
+local exp,log,fmod=math.exp,math.log,math.fmod
+local max,min=math.max,math.min
+local inf=math.huge
+local function clamp(v,lo,hi)return max(lo,min(hi,v))end
+local function lerp(a,b,t)return a+(b-a)*t end
+local mix=lerp
+local function round(x)return floor(x+0.5)end
+local function fract(x)return x-floor(x)end
+local function sign(x)return x>0 and 1 or x<0 and -1 or 0 end
+local function map(v,a,b,c,d)return c+(d-c)*(v-a)/(b-a)end
+local function wrap(v,lo,hi)local r=hi-lo;return lo+fmod(fmod(v-lo,r)+r,r)end
+local function snap(v,step)return floor(v/step+0.5)*step end
+local function smoothstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*(3-2*t)
+end
+local function smootherstep(e0,e1,x)
+  local t=clamp((x-e0)/(e1-e0),0,1);return t*t*t*(t*(6*t-15)+10)
+end
+local function triangle(t)return 1-abs(t*2-1)end
+local function pingpong(t)t=fract(t*.5)*2;return t<1 and t or 2-t end
+local function saw(t)return fract(t)end
+local function square(t,duty)return fract(t)<(duty or .5) and 1 or 0 end
+local function ease_in(t,n)return t^(n or 2)end
+local function ease_out(t,n)return 1-(1-t)^(n or 2)end
+local function ease_inout(t,n)
+  n=n or 2;return t<.5 and(2*t)^n/2 or 1-(2-2*t)^n/2
+end
+local function sine_in(t)return 1-cos(t*pi/2)end
+local function sine_out(t)return sin(t*pi/2)end
+local function sine_inout(t)return(1-cos(pi*t))/2 end
+local function expo_in(t)return t==0 and 0 or 2^(10*t-10)end
+local function expo_out(t)return t==1 and 1 or 1-2^(-10*t)end
+local function circ_in(t)return 1-sqrt(1-t*t)end
+local function circ_out(t)t=t-1;return sqrt(1-t*t)end
+local function _b(t)
+  if t<1/2.75 then return 7.5625*t*t
+  elseif t<2/2.75 then t=t-1.5/2.75;return 7.5625*t*t+.75
+  elseif t<2.5/2.75 then t=t-2.25/2.75;return 7.5625*t*t+.9375
+  else t=t-2.625/2.75;return 7.5625*t*t+.984375 end
+end
+local function bounce(t)return _b(t)end
+local function bounce_in(t)return 1-_b(1-t)end
+local function elastic(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p=a or 1,p or .3
+  return a*2^(-10*t)*sin((t-p/4)*pi*2/p)+1
+end
+local function elastic_in(t,a,p)
+  if t==0 or t==1 then return t end
+  a,p,t=a or 1,p or .3,t-1
+  return-(a*2^(10*t)*sin((t-p/4)*pi*2/p))
+end
+local function back(t,s)
+  s=s or 1.70158;t=t-1;return t*t*((s+1)*t+s)+1
+end
+local function back_in(t,s)
+  s=s or 1.70158;return t*t*((s+1)*t-s)
+end
+local function steps(t,n,mode)
+  n=n or 10
+  return mode=="start" and ceil(t*n)/n or floor(t*n)/n
+end
+local function bezier(t,x1,y1,x2,y2)
+  local function bx(s)return 3*s*(1-s)^2*x1+3*s^2*(1-s)*x2+s^3 end
+  local function by(s)return 3*s*(1-s)^2*y1+3*s^2*(1-s)*y2+s^3 end
+  local lo,hi,s=0,1,t
+  for _=1,25 do
+    local x=bx(s)
+    if abs(x-t)<1e-7 then break end
+    if x<t then lo=s else hi=s end
+    s=(lo+hi)*.5
+  end
+  return by(s)
+end
+local function spring(t,zeta,omega)
+  zeta=zeta or 0.5;omega=omega or 10.0
+  if t<=0 then return 0 end
+  if t>=1 then return 1 end
+  if zeta<0 then zeta=0 end
+  if omega<=0 then return t end
+  local tp
+  if zeta<1e-6 then tp=t*(2*pi/omega)
+  else tp=t*(4.605/(zeta*omega))end
+  if zeta<1-1e-6 then
+    local wd=omega*sqrt(1-zeta*zeta)
+    local env=exp(-zeta*omega*tp)
+    return 1-env*(cos(wd*tp)+(zeta/sqrt(1-zeta*zeta))*sin(wd*tp))
+  elseif zeta<1+1e-6 then
+    return 1-exp(-omega*tp)*(1+omega*tp)
+  else
+    local s=sqrt(zeta*zeta-1)
+    local r1=-omega*(zeta-s);local r2=-omega*(zeta+s)
+    local A=r2/(r1-r2);local B=-r1/(r1-r2)
+    return 1+A*exp(r1*tp)+B*exp(r2*tp)
+  end
+end
+local _P={151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,
+  140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,
+  247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,
+  57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,
+  74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,
+  60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,
+  65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,
+  200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,
+  52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,
+  207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,
+  119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,
+  129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,
+  218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,
+  81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,
+  184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,
+  222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180}
+local function _fd(x)return x*x*x*(x*(x*6-15)+10)end
+local function _n1(x)
+  local X=floor(x)%256;local f=x-floor(x);local u=_fd(f)
+  local a=(_P[X+1]%2==1)and f or -f
+  local b=(_P[(X+1)%256+1]%2==1)and(f-1)or-(f-1)
+  return a+u*(b-a)
+end
+local function perlin(t,octaves,freq)
+  local oc=max(1,min(16,floor(octaves or 4)))
+  local fr=(freq and freq>0)and freq or 4.0
+  local r,amp,tot,f=0,1,0,fr
+  for _=1,oc do r=r+_n1(t*f)*amp;tot=tot+amp;amp=amp*.5;f=f*2 end
+  return r/tot
+end
+local function to_ratio(v)
+  local d = ed - st
+  if d == 0 then return 0 end
+  return (v - st) / d
+end
+local function log_ratio(t, origin)
+  origin = origin or 0
+  local a, b = st - origin, ed - origin
+  if a == 0 or b == 0 or (a > 0) ~= (b > 0) or a == b then return t end
+  return (a * (b / a) ^ t - a) / (b - a)
+end
+return function(_t, _obj, _st, _ed, _index, _num, _slot)
+obj, st, ed, index, num, slot = _obj, _st, _ed, _index, _num, _slot
+local t = _t
+]==]
+
+-- Live の内容かこのスクリプト自身（_PRELUDE）が変わったら作り直す。
+-- LuaJIT の文字列は内部化されているので、この比較は長さによらず安い
+if _content ~= _C.content or _PRELUDE ~= _C.prelude then
+  _C.content = _content
+  _C.prelude = _PRELUDE
+  _C.prelude_lines = select(2, _PRELUDE:gsub("\n", "\n"))
+  _C.fns = {}
+  _C.errors = {}
+  _C.error_count = 0
+end
+
+-- エラーの行番号を式の中の行に直す
+local function _user_line(msg)
+  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+    return (tonumber(l) - _C.prelude_lines) .. " 行目:"
+  end))
+end
+
+local function _get_fn(slot)
+  local fn = _C.fns[slot]
+  if fn ~= nil then return fn end
+  local code = "return t"
+  local mk = "@.live." .. tostring(slot) .. "\n"
+  local cs
+  if _content:sub(1, #mk) == mk then
+    cs = #mk + 1
+  else
+    local si = _content:find("\n" .. mk, 1, true)
+    if si then cs = si + 1 + #mk end
+  end
+  if cs then
+    local ns = _content:find("\n@", cs, true)
+    local s = ns and _content:sub(cs, ns - 1) or _content:sub(cs)
+    if s:match("%S") then code = s end
+  end
+  -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
+  code = code:gsub("%s+$", "")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  if chunk then
+    local ok, made = pcall(chunk)
+    if ok and type(made) == "function" then
+      fn = made
+    else
+      fn = false
+      _report(slot, _user_line(made))
+    end
+  else
+    fn = false
+    _report(slot, "構文エラー: " .. _user_line(err))
+  end
+  _C.fns[slot] = fn
+  return fn
+end
+
+-- 式の戻り値（比率）。エラーや数値でない戻り値は t（直線）にする
+local function _ratio(slot, t, st, ed, index)
+  local fn = _get_fn(slot)
+  if not fn then return t end
+  local ok, v = pcall(fn, t, obj, st, ed, index, _n, slot)
+  if ok then
+    if type(v) == "number" then return v end
+    return t
+  end
+  _report(slot, _user_line(v))
+  return t
+end
+
+-- 加速・減速の折り返し（@Basic_S の reduce_inout_ease と同じ考え方。ただし
+-- どちらも OFF は「そのまま」にして v1.0 のトラックの見た目を保つ）。
+-- 戻り値は v0 から v1 への比率で、式には折り返した向きの st / ed を見せる
+local function _shaped_ratio(slot, t, v0, v1, index)
+  if _accel and _decel then
+    local mid = (v0 + v1) / 2
+    if t < 0.5 then
+      return 0.5 * _ratio(slot, 2 * t, v0, mid, index)
+    end
+    return 1 - 0.5 * _ratio(slot, 2 - 2 * t, v1, mid, index)
+  elseif _decel then
+    return 1 - _ratio(slot, 1 - t, v1, v0, index)
+  end
+  return _ratio(slot, t, v0, v1, index)
+end
+
+if _n < 2 then
+  return _getpoint(0)
+end
+
+if _mode == 2 then
+  -- 全体で1本: 全体の時間位置にカーブを掛けて時間を歪め、歪めた時間での値を中間点から直線で取る
+  local _u = _getpoint("timecontrol", "value")
+  local _R = _shaped_ratio(_slot, _u, _getpoint(0), _getpoint(_n - 1), 0)
+  local _tt = _R * _getpoint("time", _n - 1)
+  local _k = 0
+  while _k < _n - 2 and _getpoint("time", _k + 1) <= _tt do
+    _k = _k + 1
+  end
+  local _t0, _t1 = _getpoint("time", _k), _getpoint("time", _k + 1)
+  local _s = (_t1 > _t0) and (_tt - _t0) / (_t1 - _t0) or 1
+  local _v0, _v1 = _getpoint(_k), _getpoint(_k + 1)
+  return _v0 + (_v1 - _v0) * _s
+end
+
+local _idx, _t = math.modf(_getpoint("index"))
+-- キーフレームちょうど（小数部=0）では次区間の始点として t=0 になる。
+-- そのままだと _st がキー値になり、曲線の終点 y≠1（例: 弧で y3=0）のとき
+-- 直前フレーム（t→1）から終了キー値へ飛ぶ。直前区間の t=1 として評価する。
+if _t == 0 and _idx > 0 then
+  _idx = _idx - 1
+  _t = 1
+end
+if _idx >= _n - 1 then
+  _idx, _t = _n - 2, 1
+elseif _idx < 0 then
+  _idx, _t = 0, 0
+end
+-- 時間制御は区間ごとに掛ける（@Basic_S の 区間ごとに時間制御 と同じ取り方）
+_t = _getpoint("timecontrol", "value", _t * _getpoint("time", _n - 1))
+
+local _st = _getpoint(_idx)
+local _ed = _getpoint(_idx + 1)
+local _use = (_mode == 1) and (_slot + _idx) or _slot
+return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
+
+@バウンス
+--label:HexScript
+--information:バウンス@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local function _b(t)
+  if t < 1/2.75 then return 7.5625*t*t
+  elseif t < 2/2.75 then t=t-1.5/2.75; return 7.5625*t*t+0.75
+  elseif t < 2.5/2.75 then t=t-2.25/2.75; return 7.5625*t*t+0.9375
+  else t=t-2.625/2.75; return 7.5625*t*t+0.984375 end
+end
+return _st + (_ed - _st) * _b(_t)
+
+@ループバウンス
+--label:HexScript
+--information:ループバウンス@カーブエディタ2 v1.10 by HexBrowns
+--param:周期(フレーム),50
+
+-- 跳ねるような動きを一定周期で無限に繰り返す（減衰なし・ループ向き）
+-- 開始値～終了値の間を周期(フレーム数)ごとに往復する
+local _idx = math.floor(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local _period = math.max(1, obj.getpoint("param") or 25)
+local _frame = obj.getpoint("time") * obj.getpoint("framerate")
+local _phase = math.fmod(_frame, _period) / _period
+if _phase < 0 then _phase = _phase + 1 end
+local _bounce = 4 * _phase * (1 - _phase) -- 放物線：0→1→0で1周期（境界がなめらかにループ）
+return _st + (_ed - _st) * _bounce
+
+@弾性
+--label:HexScript
+--information:弾性@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local _r
+if _t == 0 or _t == 1 then
+  _r = _t
+else
+  local a, p = 1, 0.5
+  _r = a * 2^(-10*_t) * math.sin((_t - p/4) * math.pi*2/p) + 1
+end
+return _st + (_ed - _st) * _r
+
+@バック
+--label:HexScript
+--information:バック@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local s = 2.5
+local t1 = _t - 1
+return _st + (_ed - _st) * (t1*t1*((s+1)*t1+s)+1)
+
+@ベジェ
+--label:HexScript
+--information:ベジェ@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+-- CSS cubic-bezier(0.42, 0, 0.58, 1.0) = ease-in-out
+local x1,y1,x2,y2 = 0.42, 0, 0.58, 1.0
+local function bx(s) return 3*s*(1-s)^2*x1 + 3*s^2*(1-s)*x2 + s^3 end
+local function by(s) return 3*s*(1-s)^2*y1 + 3*s^2*(1-s)*y2 + s^3 end
+local lo, hi, s = 0, 1, _t
+for _ = 1, 25 do
+  local x = bx(s)
+  if math.abs(x - _t) < 1e-7 then break end
+  if x < _t then lo = s else hi = s end
+  s = (lo + hi) * 0.5
+end
+return _st + (_ed - _st) * by(s)
+
+@サイン
+--label:HexScript
+--information:サイン@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+return _st + (_ed - _st) * ((1 - math.cos(math.pi * _t)) / 2)
+
+@指数アウト
+--label:HexScript
+--information:指数アウト@カーブエディタ2 v1.10 by HexBrowns
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local _r = _t == 1 and 1 or 1 - 2^(-10 * _t)
+return _st + (_ed - _st) * _r
+
+@ステップ
+--label:HexScript
+--information:ステップ@カーブエディタ2 v1.10 by HexBrowns
+--param:段数,8
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local n = math.max(1, math.floor(obj.getpoint("param")))
+return _st + (_ed - _st) * (math.floor(_t * n) / n)
+
+@スプリング
+--label:HexScript
+--information:スプリング@カーブエディタ2 v1.10 by HexBrowns
+--param:減衰比,0.4
+--param:角周波数,10.0
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local zeta, omega = obj.getpoint("param")
+zeta = zeta or 0.4; omega = omega or 10.0
+local _r
+if _t <= 0 then
+  _r = 0
+elseif _t >= 1 then
+  _r = 1
+else
+  if zeta < 0 then zeta = 0 end
+  if omega <= 0 then
+    _r = _t
+  else
+    local pi = math.pi
+    local tp
+    if zeta < 1e-6 then tp = _t * (2*pi/omega)
+    else tp = _t * (4.605/(zeta*omega)) end
+    if zeta < 1 - 1e-6 then
+      local wd = omega * math.sqrt(1 - zeta*zeta)
+      local env = math.exp(-zeta*omega*tp)
+      _r = 1 - env*(math.cos(wd*tp) + (zeta/math.sqrt(1-zeta*zeta))*math.sin(wd*tp))
+    elseif zeta < 1 + 1e-6 then
+      _r = 1 - math.exp(-omega*tp)*(1 + omega*tp)
+    else
+      local s = math.sqrt(zeta*zeta - 1)
+      local r1 = -omega*(zeta-s); local r2 = -omega*(zeta+s)
+      local A = r2/(r1-r2); local B = -r1/(r1-r2)
+      _r = 1 + A*math.exp(r1*tp) + B*math.exp(r2*tp)
+    end
+  end
+end
+return _st + (_ed - _st) * _r
+
+@パーリン揺らぎ
+--label:HexScript
+--information:パーリン揺らぎ@カーブエディタ2 v1.10 by HexBrowns
+--param:オクターブ,3
+--param:周波数,4.0
+
+local _idx, _t = math.modf(obj.getpoint("index"))
+local _st = obj.getpoint(_idx)
+local _ed = obj.getpoint(_idx + 1)
+local _oc, _fr = obj.getpoint("param")
+local _octaves = math.max(1, math.min(16, math.floor(_oc or 3)))
+local _freq = (_fr and _fr > 0) and _fr or 4.0
+local _P = {151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,
+  140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,
+  247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,
+  57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,
+  74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,
+  60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,
+  65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,
+  200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,
+  52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,
+  207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,
+  119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,
+  129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,
+  218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,
+  81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,
+  184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,
+  222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180}
+local function _fd(x) return x*x*x*(x*(x*6-15)+10) end
+local function _n1(x)
+  local X = math.floor(x) % 256
+  local f = x - math.floor(x)
+  local u = _fd(f)
+  local a = (_P[X+1]%2==1) and f or -f
+  local b = (_P[(X+1)%256+1]%2==1) and (f-1) or -(f-1)
+  return a + u*(b-a)
+end
+local _noise, _amp, _tot, _f = 0, 1, 0, _freq
+for _ = 1, _octaves do
+  _noise = _noise + _n1(_t * _f) * _amp
+  _tot   = _tot + _amp
+  _amp   = _amp * 0.5
+  _f     = _f * 2
+end
+local _r = _t + (_noise / _tot) * 0.2
+return _st + (_ed - _st) * _r

@@ -1,0 +1,32 @@
+[project]
+id = "curveeditor2"
+name = "CurveEditor2"
+version = "0.9.7"
+
+[build_group]
+curveeditor2_build = ["build_release.cmd"]
+
+[artifacts.curveeditor2_aux2]
+source = "CurveEditor2.aux2"
+destination = "Plugin/CurveEditor2/CurveEditor2.aux2"
+build = { group = "curveeditor2_build" }
+
+[artifacts.curveeditor2_tra2]
+source = "assets/@カーブエディタ2.tra2"
+destination = "Script/CurveEditor2/@カーブエディタ2.tra2"
+
+[release]
+output_dir = "release"
+package_id = "curveeditor2"
+package_name = "CurveEditor2"
+package_information = "CurveEditor2 v{version} by HexBrowns"
+zip_name = "CurveEditor2-v{version}"
+profile = "release"
+include = [
+    "curveeditor2_aux2",
+    "curveeditor2_tra2",
+]
+
+[catalog]
+id = "curveeditor2.curveeditor2"
+description_path = "./README.md"

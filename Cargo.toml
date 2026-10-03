@@ -1,0 +1,22 @@
+[package]
+name = "curve-editor2"
+version = "0.9.7"
+edition = "2021"
+license = "MIT"
+authors = ["HexBrowns"]
+description = "CurveEditor2 - easing editor for AviUtl2"
+publish = false
+
+[lib]
+name = "curve_editor2"
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0"
+aviutl2 = { version = "0.47", features = ["generic", "serde", "aviutl2-alias"] }
+aviutl2-eframe = "0.47"
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
