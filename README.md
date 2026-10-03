@@ -1,5 +1,7 @@
 # CurveEditor2 マニュアル
 
+<img src="images/CurveEditor2_screen.png" width="360">
+
 **CurveEditor2** は、AviUtl2 向けイージングエディタ（Rust 製 `.aux2`）です。トラックバー適用は専用の `@カーブエディタ2.tra2` を使用します。
 
 - **バージョン:** 0.9.7（`@カーブエディタ2.tra2` v1.10 / aviutl2-rs 0.47）
