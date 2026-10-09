@@ -1,32 +1,31 @@
+#:schema ./.aviutl2-cli/aviutl2.schema.json
+#
+# ビルドと配布の設定（aviutl2-cli: https://github.com/sevenc-nanashi/aviutl2-cli）。
+#   au2 release   ビルドして release/ に au2pkg とカタログ用の catalog.json を作る
+# project.version は Cargo.toml の version と揃える。
+# 移動方法（.tra2）の正本は assets/。
+
 [project]
-id = "curveeditor2"
+id = "HexBrowns.CurveEditor2"
 name = "CurveEditor2"
-version = "0.9.7"
+version = "0.9.9"
 
-[build_group]
-curveeditor2_build = ["build_release.cmd"]
-
-[artifacts.curveeditor2_aux2]
-source = "CurveEditor2.aux2"
+[artifacts."CurveEditor2.aux2"]
+build = "cargo build --release"
+source = "target/release/curve_editor2.dll"
 destination = "Plugin/CurveEditor2/CurveEditor2.aux2"
-build = { group = "curveeditor2_build" }
 
-[artifacts.curveeditor2_tra2]
+[artifacts."@カーブエディタ2.tra2"]
 source = "assets/@カーブエディタ2.tra2"
 destination = "Script/CurveEditor2/@カーブエディタ2.tra2"
 
 [release]
-output_dir = "release"
-package_id = "curveeditor2"
-package_name = "CurveEditor2"
-package_information = "CurveEditor2 v{version} by HexBrowns"
-zip_name = "CurveEditor2-v{version}"
-profile = "release"
-include = [
-    "curveeditor2_aux2",
-    "curveeditor2_tra2",
-]
+# インストール時のダイアログに、本体と依存クレートのライセンスを出す
+prebuild = ['copy /b /y LICENSE + THIRD_PARTY_CRATES.md release\package.txt >nul']
+package_template = "release/package.txt"
+package_information = "{name} v{version} by HexBrowns"
 
 [catalog]
-id = "curveeditor2.curveeditor2"
-description_path = "./README.md"
+id = "HexBrowns.CurveEditor2"
+license_path = { type = "MIT", path = "./LICENSE" }
+download_repo = { owner = "HexBrowns", repo = "CurveEditor2" }

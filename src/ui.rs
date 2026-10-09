@@ -420,7 +420,7 @@ struct CodeCacheKey {
 /// Live 同期間隔（秒）。ドラッグ中も追従するが毎フレームのディスク書き込みは避ける。
 pub const LIVE_SYNC_INTERVAL_SECS: f64 = 0.15;
 
-/// フォーカス変更のポーリング間隔（秒）。Edit API 連打を避ける。
+/// フォーカスの指紋を読み直す間隔の下限（秒）。本体のイベントが続けて来ても Edit API を連打しない。
 pub const FOCUS_POLL_INTERVAL_SECS: f64 = 0.4;
 
 const COMPACT_WIDTH: f32 = 520.0;
@@ -1281,6 +1281,8 @@ impl CurveEditor2App {
         handle: AviUtl2EframeHandle,
         state: SharedState,
     ) -> Self {
+        // 本体のイベントから UI を起こせるようにする（`lib.rs` の `on_host_event`）
+        let _ = crate::EGUI_CTX.set(cc.egui_ctx.clone());
         cc.egui_ctx.all_styles_mut(|style| {
             style.visuals = aviutl2_eframe::aviutl2_visuals();
         });
@@ -1333,6 +1335,7 @@ impl CurveEditor2App {
     }
 
     /// フォーカスオブジェクトが変わったらトラック一覧を自動取得（0.4 秒スロットル）。
+    /// 読むのは本体のイベントで印（`FOCUS_DIRTY`）が立っているときだけ（v0.9.9）。印が無ければ読まず、描き直しも頼まない
     fn poll_focus_and_auto_fetch(&mut self, ctx: &egui::Context) {
         // register() 時点でウィンドウは存在するが非表示のときは API を叩かない
         if !self.is_editor_window_visible() {
@@ -1346,21 +1349,28 @@ impl CurveEditor2App {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
             return;
         }
-        if now - self.last_focus_poll_secs < FOCUS_POLL_INTERVAL_SECS {
-            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        if !crate::FOCUS_DIRTY.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        let since = now - self.last_focus_poll_secs;
+        if since < FOCUS_POLL_INTERVAL_SECS {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(FOCUS_POLL_INTERVAL_SECS - since));
             return;
         }
         self.last_focus_poll_secs = now;
-        ctx.request_repaint_after(std::time::Duration::from_millis(
-            (FOCUS_POLL_INTERVAL_SECS * 1000.0) as u64,
-        ));
+        crate::FOCUS_DIRTY.store(false, std::sync::atomic::Ordering::Release);
 
         let fingerprint = match edit_ops::catch_edit_panic(
             "focused_object_fingerprint",
             edit_ops::focused_object_fingerprint,
         ) {
             Ok(fp) => fp,
-            Err(_) => return, // ポーリング失敗はステータスを汚さない
+            Err(_) => {
+                // 読めなかった（出力中など）。ステータスは汚さず、印を戻して後で読み直す
+                crate::FOCUS_DIRTY.store(true, std::sync::atomic::Ordering::Release);
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(FOCUS_POLL_INTERVAL_SECS));
+                return;
+            }
         };
 
         match fingerprint {

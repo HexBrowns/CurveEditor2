@@ -2,16 +2,18 @@
 
 AviUtl2 向けイージングエディタ（Rust 製 `.aux2`）。専用トラックバー移動スクリプト `@カーブエディタ2.tra2` と連携します。
 
-- **バージョン:** 0.9.7（aviutl2-rs 0.47 / `@カーブエディタ2.tra2` v1.10）
-- **`.tra2` の正本:** `assets/@カーブエディタ2.tra2`（`build.ps1` が `Script/CurveEditor2/` へ配置する。検証器 `AI/scripts/CurveEditor2/verify_tra2.py`）
+- **バージョン:** 0.9.8（aviutl2-rs 0.47 / `@カーブエディタ2.tra2` v1.10）
+- **`.tra2` の正本:** `assets/@カーブエディタ2.tra2`（`aviutl2.toml` の同梱物として `Script/CurveEditor2/` へ配置する。検証器 `AI/scripts/CurveEditor2/verify_tra2.py`）
 - **依存:** `aviutl2` / `aviutl2-eframe` **0.47**（ホスト AviUtl2 **2.1.10** 以上）
 
 ## ビルド
 
 ```powershell
-cd AI\plugins\CurveEditor2
-.\build.ps1
+python AI/tools/au2_build.py CurveEditor2               # au2 release → 本番（C:\ProgramData\aviutl2）へ配置
+python AI/tools/au2_build.py CurveEditor2 --no-deploy   # 配置しない（本番との違いだけ出す）
 ```
+
+ビルドと同梱物は `aviutl2.toml`（[aviutl2-cli](https://github.com/sevenc-nanashi/aviutl2-cli)）が正本。このフォルダで `au2 release` だけを実行すると `release/` に au2pkg ができる。
 
 ## 配置
 

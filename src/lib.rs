@@ -10,9 +10,10 @@ mod ui;
 mod undo;
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use aviutl2::AnyResult;
+use aviutl2_eframe::egui;
 use parking_lot::{Mutex, RwLock};
 
 use aviutl2::generic::__bridge::GenericSingleton;
@@ -25,6 +26,22 @@ use serde::{Deserialize, Serialize};
 use ui::{CurveEditor2App, EditorState, SharedState};
 
 pub const SETTINGS_SERDE_KEY: &str = "curveeditor2/settings";
+
+/// 本体のイベント（フォーカス・オブジェクト・シーンの変化）で立てる印（v0.9.9）。イベント用スレッドで立て、UI のスレッドで下ろす。
+/// 立っているときだけフォーカスの指紋を読む（それまでは見えている間 0.4 秒ごとに読んでいた。`issues/20261010_focus_polled_every_400ms.md`）
+pub(crate) static FOCUS_DIRTY: AtomicBool = AtomicBool::new(true);
+
+/// UI のスレッドを起こすための egui の Context（ウィンドウができたら入る）
+pub(crate) static EGUI_CTX: OnceLock<egui::Context> = OnceLock::new();
+
+/// 印を立てて UI を起こす。ここから本体を読まない。立っている間は起こし直さない（連続したイベントで描き直しを重ねない）
+fn on_host_event() {
+    if !FOCUS_DIRTY.swap(true, Ordering::AcqRel) {
+        if let Some(ctx) = EGUI_CTX.get() {
+            ctx.request_repaint();
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginSettings {
@@ -199,6 +216,18 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             }
         }
         registry.register_edit_menu("CurveEditor2を開く", Self::open_editor_from_menu);
+    }
+
+    fn event_change_focus_object(&mut self) {
+        on_host_event();
+    }
+
+    fn event_update_object_info(&mut self) {
+        on_host_event();
+    }
+
+    fn event_change_scene_info(&mut self) {
+        on_host_event();
     }
 
     fn on_project_load(&mut self, project: &mut aviutl2::generic::ProjectFile) {
