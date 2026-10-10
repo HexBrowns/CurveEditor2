@@ -8,7 +8,7 @@
 [project]
 id = "HexBrowns.CurveEditor_H"
 name = "CurveEditor_H"
-version = "0.10.0"
+version = "0.11.0"
 
 [artifacts."CurveEditor_H.aux2"]
 build = "cargo build --release"

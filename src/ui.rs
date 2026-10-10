@@ -139,26 +139,131 @@ impl ViewState {
 #[derive(Default, Clone, Copy)]
 struct NumericEdits {
     changed: bool,
+    /// 打ち込んだ値を Enter か、ほかをクリックして確定したフレーム。
+    /// このフレームのうちに Undo の 1 段にする（直後にグラフのドラッグが始まっても混ぜない）。
+    committed: bool,
 }
 
 impl NumericEdits {
-    fn record(&mut self, response: &egui::Response) {
-        if response.changed() {
-            self.changed = true;
-        }
+    fn record(&mut self, edit: &NumericEdit) {
+        self.changed |= edit.changed;
+        self.committed |= edit.committed;
     }
 
     fn merge(&mut self, other: NumericEdits) {
         self.changed |= other.changed;
+        self.committed |= other.committed;
     }
 }
 
-fn coord_drag(ui: &mut egui::Ui, label: &str, value: &mut f64) -> egui::Response {
+/// 数値欄 1 つ分の結果。
+///
+/// 「変わった」は値の比較で決める。`DragValue` を打ち込んでいる間は、値が変わらなくても
+/// `Response::changed()` が真になる（中の入力欄の文字が変わったため）。それで Live 同期を起こさない。
+#[derive(Default, Clone, Copy)]
+struct NumericEdit {
+    changed: bool,
+    committed: bool,
+}
+
+impl NumericEdit {
+    fn of(response: &egui::Response, before: f64, after: f64) -> Self {
+        let changed = before != after;
+        Self {
+            changed,
+            // 数値欄は `update_while_editing(false)` なので、打ち込みで値が変わるのはフォーカスが外れたフレームだけ
+            committed: changed && response.lost_focus(),
+        }
+    }
+}
+
+/// 数値欄（ルール au2-rs-plugin「入力の確定と取り消し」）。`configure` で範囲・速さなどを付けた `DragValue` に
+/// `update_while_editing(false)` を足して置く。打っている途中の値は使わず、Enter かほかをクリックで確定する。
+/// 入力中の Esc は入力前の値に戻す（`restore_after_escape`）。ドラッグで変えた値はその場で使う。
+fn drag_value<T>(
+    ui: &mut egui::Ui,
+    value: &mut T,
+    configure: impl for<'v> FnOnce(egui::DragValue<'v>) -> egui::DragValue<'v>,
+) -> egui::Response
+where
+    T: egui::emath::Numeric + Default + Send + Sync,
+{
+    let before = *value;
+    let mut response = ui.add(configure(egui::DragValue::new(&mut *value)).update_while_editing(false));
+    restore_after_escape(ui, &mut response, value, before);
+    response
+}
+
+/// egui 0.36.2 の `DragValue` は `update_while_editing(false)` でも、Esc の次のフレームで打った文字を値にしてしまう
+/// （フォーカスを失ったとみなす期間が 2 フレームあり、2 フレーム目には Esc が押されていないため）。
+/// Esc のフレームの値を覚えておき、次のフレームで戻す（参照実装 LayerSilenceCut_H の `setting_value`）。
+/// 戻したフレームは、欄を描く前と値が同じなら `changed()` を偽にする（呼び出し側で余計な処理を走らせない）。
+/// `before` は欄を描く前の値。`Slider` の数値欄にも使える（フォーカスの前後 2 フレームは応答の ID が数値欄のもの）
+fn restore_after_escape<T>(ui: &egui::Ui, response: &mut egui::Response, value: &mut T, before: T)
+where
+    T: egui::emath::Numeric + Default + Send + Sync,
+{
+    let key = response.id.with("escaped");
+    let pass = ui.ctx().cumulative_pass_nr();
+    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.insert_temp(key, (pass, *value)));
+    } else if let Some((at, kept)) = ui.data_mut(|d| d.remove_temp::<(u64, T)>(key)) {
+        if pass == at + 1 {
+            *value = kept;
+            if *value == before {
+                // `flags` は egui の doc(hidden) の公開フィールド。`changed()` を外す手段がこれしかない（0.36.2）
+                response.flags.remove(egui::response::Flags::CHANGED);
+            }
+        }
+    }
+}
+
+fn coord_drag(ui: &mut egui::Ui, label: &str, value: &mut f64) -> NumericEdit {
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.add(egui::DragValue::new(value).speed(0.01).fixed_decimals(4))
+        let before = *value;
+        let response = drag_value(ui, value, |d| d.speed(0.01).fixed_decimals(4));
+        NumericEdit::of(&response, before, *value)
     })
     .inner
+}
+
+/// 減衰比・角周波数のスライダー。右の数値欄は Enter かほかをクリックで確定する（つまみのドラッグは即時）。
+fn param_slider(
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    logarithmic: bool,
+    text: &str,
+) -> NumericEdit {
+    let before = *value;
+    let mut response = ui.add(
+        egui::Slider::new(&mut *value, range)
+            .logarithmic(logarithmic)
+            .text(text)
+            .update_while_editing(false),
+    );
+    restore_after_escape(ui, &mut response, value, before);
+    NumericEdit::of(&response, before, *value)
+}
+
+/// 1 行の入力欄に付ける「Esc で入力前の文字に戻す」。
+/// フォーカスを得たときに元の文字を覚え、Esc でフォーカスが外れたらそれに戻す。
+/// Enter・ほかをクリックで外れたときは、打った文字のまま（確定）。
+/// 複数行のエディタ（Lua 欄）には使わない（書いた内容が消える。Esc はフォーカスを外すだけ）。
+fn revert_on_escape(ui: &egui::Ui, response: &egui::Response, text: &mut String) {
+    let key = response.id.with("before_edit");
+    if response.gained_focus() {
+        ui.data_mut(|d| d.insert_temp(key, text.clone()));
+    }
+    if response.lost_focus() {
+        let before = ui.data_mut(|d| d.remove_temp::<String>(key));
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if let Some(b) = before {
+                *text = b;
+            }
+        }
+    }
 }
 
 enum AnchorPanelMode {
@@ -207,60 +312,32 @@ fn render_anchor_panel(
                     }
 
                     ui.label("t");
+                    let anchor = match mode {
+                        AnchorPanelMode::Multi => &mut s.multi_anchors[idx],
+                        AnchorPanelMode::Composite => &mut s.composite.anchors[idx],
+                    };
                     let t_changed = if is_endpoint {
-                        let t_val = match mode {
-                            AnchorPanelMode::Multi => s.multi_anchors[idx].t,
-                            AnchorPanelMode::Composite => s.composite.anchors[idx].t,
-                        };
+                        let t_val = anchor.t;
                         ui.label(format!("{t_val:.4}"));
                         false
                     } else {
-                        let response = match mode {
-                            AnchorPanelMode::Multi => {
-                                let anchor = &mut s.multi_anchors[idx];
-                                ui.add(
-                                    egui::DragValue::new(&mut anchor.t)
-                                        .speed(0.01)
-                                        .fixed_decimals(4)
-                                        .range(0.0..=1.0),
-                                )
-                            }
-                            AnchorPanelMode::Composite => {
-                                let anchor = &mut s.composite.anchors[idx];
-                                ui.add(
-                                    egui::DragValue::new(&mut anchor.t)
-                                        .speed(0.01)
-                                        .fixed_decimals(4)
-                                        .range(0.0..=1.0),
-                                )
-                            }
-                        };
-                        edits.record(&response);
-                        response.changed()
+                        let before = anchor.t;
+                        let response = drag_value(ui, &mut anchor.t, |d| {
+                            d.speed(0.01).fixed_decimals(4).range(0.0..=1.0)
+                        });
+                        let edit = NumericEdit::of(&response, before, anchor.t);
+                        edits.record(&edit);
+                        edit.changed
                     };
 
                     ui.label("y");
                     let y_changed = {
-                        let response = match mode {
-                            AnchorPanelMode::Multi => {
-                                let anchor = &mut s.multi_anchors[idx];
-                                ui.add(
-                                    egui::DragValue::new(&mut anchor.y)
-                                        .speed(0.01)
-                                        .fixed_decimals(4),
-                                )
-                            }
-                            AnchorPanelMode::Composite => {
-                                let anchor = &mut s.composite.anchors[idx];
-                                ui.add(
-                                    egui::DragValue::new(&mut anchor.y)
-                                        .speed(0.01)
-                                        .fixed_decimals(4),
-                                )
-                            }
-                        };
-                        edits.record(&response);
-                        response.changed()
+                        let before = anchor.y;
+                        let response =
+                            drag_value(ui, &mut anchor.y, |d| d.speed(0.01).fixed_decimals(4));
+                        let edit = NumericEdit::of(&response, before, anchor.y);
+                        edits.record(&edit);
+                        edit.changed
                     };
 
                     if t_changed || y_changed {
@@ -1135,6 +1212,22 @@ pub struct CurveEditorHApp {
     /// 自動トラック更新用: 前回観測したフォーカス指紋
     last_focus_fingerprint: Option<String>,
     last_focus_poll_secs: f64,
+    /// 前のフレームの終わりに、egui のどこかにフォーカスがあったか・ポップアップが開いていたか。
+    /// Esc でパネルを閉じてよいかをこれで決める（`esc_dismisses`）。
+    busy_last_frame: bool,
+}
+
+/// Esc でメニュー・パネルを閉じてよいか。
+/// 押す前にどこにもフォーカスが無く、ポップアップも開いていなかったときだけ閉じる
+/// （入力中の Esc は入力の取り消し、コンボボックスの Esc はそれを閉じるだけにする）。
+/// egui はフレームの始めに Esc でフォーカスを外すので、今のフレームではなく前のフレームの終わりの状態で見る。
+fn esc_dismisses(esc_pressed: bool, busy_last_frame: bool) -> bool {
+    esc_pressed && !busy_last_frame
+}
+
+/// フレームの終わりに見る「入力中か」（`busy_last_frame` に入れる値）。
+fn ui_busy(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused().is_some()) || ctx.any_popup_open()
 }
 
 impl CurveEditorHApp {
@@ -1350,6 +1443,7 @@ impl CurveEditorHApp {
             pending_fetch_error: None,
             last_focus_fingerprint: None,
             last_focus_poll_secs: 0.0,
+            busy_last_frame: false,
         }
     }
 
@@ -1496,7 +1590,12 @@ impl eframe::App for CurveEditorHApp {
         self.run_deferred_api_work(ui.ctx());
         self.poll_focus_and_auto_fetch(ui.ctx());
 
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // 入力中（数値・プリセット名・Lua 欄）とポップアップが開いている間の Esc は、そちらだけに効かせる。
+        // 数値欄とプリセット名は入力前に戻り、Lua 欄はフォーカスが外れるだけ（本文は消さない）
+        if esc_dismisses(
+            ui.input(|i| i.key_pressed(egui::Key::Escape)),
+            self.busy_last_frame,
+        ) {
             self.dismiss_menus_and_panels(ui.ctx());
         }
 
@@ -1647,6 +1746,7 @@ impl eframe::App for CurveEditorHApp {
 
         self.commit_undo_if_idle(ui.ctx());
         self.sync_live_if_due(ui.ctx());
+        self.busy_last_frame = ui_busy(ui.ctx());
     }
 }
 
@@ -1874,6 +1974,8 @@ impl CurveEditorHApp {
                 .code_editor()
                 .lock_focus(true);
             let response = ui.add(text_edit);
+            // 複数行の欄なので Esc で入力前に戻さない（書いた内容が消える）。
+            // Esc は egui がフォーカスを外すだけで、外れたら下で Lua から反映する（ほかをクリックしたときと同じ）
 
             *lua_focused = response.has_focus();
 
@@ -1999,13 +2101,7 @@ impl CurveEditorHApp {
                         s.load_curve_from_library(true);
                     }
                     let mut id = s.curve_id as i64;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut id)
-                                .range(1..=MAX_CURVE_ID as i64)
-                                .speed(0.5),
-                        )
-                        .changed()
+                    if drag_value(ui, &mut id, |d| d.range(1..=MAX_CURVE_ID as i64).speed(0.5)).changed()
                     {
                         s.set_curve_id(id.clamp(1, MAX_CURVE_ID as i64) as u32);
                     }
@@ -2032,9 +2128,7 @@ impl CurveEditorHApp {
                             s.set_slot(next);
                         }
                         let mut slot = s.slot;
-                        if ui
-                            .add(egui::DragValue::new(&mut slot).range(1..=9999).speed(0.1))
-                            .changed()
+                        if drag_value(ui, &mut slot, |d| d.range(1..=9999).speed(0.1)).changed()
                         {
                             s.set_slot(slot);
                         }
@@ -2061,13 +2155,7 @@ impl CurveEditorHApp {
                         s.load_curve_from_library(true);
                     }
                     let mut id = s.curve_id as i64;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut id)
-                                .range(1..=MAX_CURVE_ID as i64)
-                                .speed(0.5),
-                        )
-                        .changed()
+                    if drag_value(ui, &mut id, |d| d.range(1..=MAX_CURVE_ID as i64).speed(0.5)).changed()
                     {
                         s.set_curve_id(id.clamp(1, MAX_CURVE_ID as i64) as u32);
                     }
@@ -2086,9 +2174,7 @@ impl CurveEditorHApp {
                         s.set_slot(next);
                     }
                     let mut slot = s.slot;
-                    if ui
-                        .add(egui::DragValue::new(&mut slot).range(1..=9999).speed(0.1))
-                        .changed()
+                    if drag_value(ui, &mut slot, |d| d.range(1..=9999).speed(0.1)).changed()
                     {
                         s.set_slot(slot);
                     }
@@ -2112,13 +2198,7 @@ impl CurveEditorHApp {
                         s.load_curve_from_library(true);
                     }
                     let mut id = s.curve_id as i64;
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut id)
-                                .range(1..=MAX_CURVE_ID as i64)
-                                .speed(0.5),
-                        )
-                        .changed()
+                    if drag_value(ui, &mut id, |d| d.range(1..=MAX_CURVE_ID as i64).speed(0.5)).changed()
                     {
                         s.set_curve_id(id.clamp(1, MAX_CURVE_ID as i64) as u32);
                     }
@@ -2270,20 +2350,17 @@ impl CurveEditorHApp {
                 .default_open(false)
                 .show(ui, |ui| {
 
-            if layout.compact {
-                ui.horizontal(|ui| {
-                    ui.label("名:");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut s.preset_name)
-                            .desired_width(ui.available_width().min(140.0)),
-                    );
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.label("プリセット名:");
-                    ui.text_edit_singleline(&mut s.preset_name);
-                });
-            }
+            // プリセット名は「保存」「削除」「このトラックに適用」を押したときに使う（打つたびには書かない）。
+            // 入力中の Esc で入力前の名前に戻す
+            ui.horizontal(|ui| {
+                ui.label(if layout.compact { "名:" } else { "プリセット名:" });
+                let mut edit = egui::TextEdit::singleline(&mut s.preset_name);
+                if layout.compact {
+                    edit = edit.desired_width(ui.available_width().min(140.0));
+                }
+                let response = ui.add(edit);
+                revert_on_escape(ui, &response, &mut s.preset_name);
+            });
 
             ui.horizontal_wrapped(|ui| {
                 if ui.button("保存").clicked() {
@@ -2386,16 +2463,8 @@ impl CurveEditorHApp {
                     } else {
                         ui.label("減衰振動 (spring)");
                     }
-                    edits.record(
-                        &ui.add(egui::Slider::new(&mut s.spring.zeta, 0.0..=2.0).text("減衰比 ζ")),
-                    );
-                    edits.record(
-                        &ui.add(
-                            egui::Slider::new(&mut s.spring.omega, 1.0..=30.0)
-                                .logarithmic(true)
-                                .text("角周波数 ω"),
-                        ),
-                    );
+                    edits.record(&param_slider(ui, &mut s.spring.zeta, 0.0..=2.0, false, "減衰比 ζ"));
+                    edits.record(&param_slider(ui, &mut s.spring.omega, 1.0..=30.0, true, "角周波数 ω"));
                     s.refresh_code_from_mode_unless(lua_focused);
                 }
                 CurveMode::Bounce => {
@@ -2481,16 +2550,8 @@ impl CurveEditorHApp {
                                 }
                             }
                             SegmentKind::Spring => {
-                                edits.record(&ui.add(
-                                    egui::Slider::new(&mut seg.zeta, 0.0..=2.0).text("減衰比 ζ"),
-                                ));
-                                edits.record(
-                                    &ui.add(
-                                        egui::Slider::new(&mut seg.omega, 1.0..=30.0)
-                                            .logarithmic(true)
-                                            .text("角周波数 ω"),
-                                    ),
-                                );
+                                edits.record(&param_slider(ui, &mut seg.zeta, 0.0..=2.0, false, "減衰比 ζ"));
+                                edits.record(&param_slider(ui, &mut seg.omega, 1.0..=30.0, true, "角周波数 ω"));
                             }
                             SegmentKind::Linear | SegmentKind::Bounce => {}
                         }
@@ -2509,6 +2570,13 @@ impl CurveEditorHApp {
             // 数値 UI の変更もグラフ操作と同じく Live 同期の対象にする。
             if edits.changed {
                 s.mark_live_dirty();
+            }
+            // 打ち込みの確定（Enter・ほかをクリック）は、その場で Undo の 1 段にする。
+            // ほかをクリックした場合はボタンが押されたままなので commit_undo_if_idle() では確定されず、
+            // そのクリックでグラフのドラッグが始まると、打ち込みとドラッグが 1 段に混ざる。
+            // Lua 本文を作り直した後に呼ぶ（前に呼ぶと本文の違いで次のフレームにもう 1 段できる）
+            if edits.committed {
+                s.commit_undo_step();
             }
         }
             });
@@ -2711,12 +2779,10 @@ fn render_curve_toolbar(ui: &mut egui::Ui, s: &mut EditorState, layout: LayoutPr
                 s.view.reset();
             }
             ui.small("操作?").on_hover_text(WHEEL_HINT);
-            ui.add(
-                egui::DragValue::new(&mut s.grid_divisions)
-                    .range(GRID_DIVISIONS_MIN..=GRID_DIVISIONS_MAX)
-                    .speed(0.2)
-                    .prefix(if layout.compact { "格子 " } else { "グリッド " }),
-            )
+            let prefix = if layout.compact { "格子 " } else { "グリッド " };
+            drag_value(ui, &mut s.grid_divisions, |d| {
+                d.range(GRID_DIVISIONS_MIN..=GRID_DIVISIONS_MAX).speed(0.2).prefix(prefix)
+            })
             .on_hover_text(
                 "グリッドの分割数（縦横共通）。ドラッグまたはダブルクリックで入力\nShift を押しながらハンドルをドラッグすると交点にスナップ",
             );
@@ -3412,6 +3478,13 @@ fn paint_track_overlay(ui: &mut egui::Ui, s: &EditorState) {
 mod tests {
     use super::*;
 
+    /// 画面なしで 1 フレーム回す。出力の textures_delta を空にしてから捨てる
+    /// （そのまま捨てると、デバッグビルドで epaint の debug_assert「Dropped TexturesDelta with N unapplied deltas」に落ちる）
+    fn run_frame(ctx: &egui::Context, input: egui::RawInput, f: impl FnMut(&mut egui::Ui)) {
+        let mut out = ctx.run_ui(input, f);
+        out.textures_delta.clear();
+    }
+
     #[test]
     fn snap_to_grid_rounds_to_nearest_intersection() {
         assert!((snap_to_grid(0.26, 20) - 0.25).abs() < 1e-12);
@@ -3447,5 +3520,239 @@ mod tests {
         // 表示（ズーム・パン）だけの変更は段にしない
         s.view.zoom_y(0.5, 0.5);
         assert!(!s.commit_undo_step());
+    }
+
+    // ---- 入力の確定と取り消し（egui を画面なしで回す） ----
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn text(s: &str) -> egui::Event {
+        egui::Event::Text(s.to_string())
+    }
+
+    fn raw(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            events,
+            ..Default::default()
+        }
+    }
+
+    /// プリセット名の欄と同じ組み方で 1 フレーム回す。`focus` ならこのフレームでフォーカスを与える（クリックと同じ）。
+    fn frame_text_field(ctx: &egui::Context, value: &mut String, focus: bool, events: Vec<egui::Event>) {
+        run_frame(ctx, raw(events), |ui| {
+            let response = ui.add(egui::TextEdit::singleline(value));
+            if focus {
+                response.request_focus();
+            }
+            revert_on_escape(ui, &response, value);
+        });
+    }
+
+    #[test]
+    fn single_line_field_reverts_on_escape() {
+        let ctx = egui::Context::default();
+        let mut name = String::from("abc");
+        frame_text_field(&ctx, &mut name, true, vec![]);
+        assert!(ui_busy(&ctx), "入力中はフォーカスがある（この間の Esc でパネルを閉じない）");
+        frame_text_field(&ctx, &mut name, false, vec![text("xyz")]);
+        assert_eq!(name, "abcxyz", "打っている途中の文字は欄に出る");
+        frame_text_field(&ctx, &mut name, false, vec![key(egui::Key::Escape)]);
+        assert_eq!(name, "abc", "入力中の Esc で入力前の文字に戻る");
+        assert!(!ui_busy(&ctx), "Esc でフォーカスが外れる");
+    }
+
+    #[test]
+    fn single_line_field_keeps_text_on_enter() {
+        let ctx = egui::Context::default();
+        let mut name = String::from("abc");
+        frame_text_field(&ctx, &mut name, true, vec![]);
+        frame_text_field(&ctx, &mut name, false, vec![text("xyz"), key(egui::Key::Enter)]);
+        assert_eq!(name, "abcxyz");
+        assert!(!ui_busy(&ctx), "Enter でフォーカスが外れる");
+        // 次の Esc は入力の取り消しではないので、文字は変えない
+        frame_text_field(&ctx, &mut name, false, vec![key(egui::Key::Escape)]);
+        assert_eq!(name, "abcxyz");
+    }
+
+    /// 数値欄（`coord_drag`）を 1 フレーム回し、`NumericEdits` を返す。
+    fn frame_coord(ctx: &egui::Context, value: &mut f64, events: Vec<egui::Event>) -> NumericEdits {
+        let mut edits = NumericEdits::default();
+        run_frame(ctx, raw(events), |ui| {
+            edits.record(&coord_drag(ui, "y1", value));
+        });
+        edits
+    }
+
+    /// Tab で数値欄にフォーカスを移し、中の文字を全部選んで `typed` を打つ（まだ確定しない）。
+    fn type_into_coord(ctx: &egui::Context, value: &mut f64, typed: &str) -> NumericEdits {
+        frame_coord(ctx, value, vec![]);
+        frame_coord(ctx, value, vec![key(egui::Key::Tab)]);
+        let select_all = egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        frame_coord(ctx, value, vec![select_all, text(typed)])
+    }
+
+    #[test]
+    fn drag_value_applies_typed_value_only_on_enter() {
+        let ctx = egui::Context::default();
+        let mut v = 0.1;
+        // 打っている途中は値を変えない（Live 同期・Undo に途中の値が乗らない）
+        let typing = type_into_coord(&ctx, &mut v, "0.5");
+        assert_eq!(v, 0.1);
+        assert!(!typing.changed && !typing.committed, "打っている途中は「変わった」にしない");
+        assert!(ui_busy(&ctx));
+        let enter = frame_coord(&ctx, &mut v, vec![key(egui::Key::Enter)]);
+        assert_eq!(v, 0.5, "Enter で打った値になる");
+        assert!(enter.changed && enter.committed, "確定したフレームを Undo の 1 段にする");
+        assert!(!ui_busy(&ctx));
+    }
+
+    #[test]
+    fn drag_value_escape_discards_typed_value() {
+        let ctx = egui::Context::default();
+        let mut v = 0.1;
+        type_into_coord(&ctx, &mut v, "0.5");
+        let esc = frame_coord(&ctx, &mut v, vec![key(egui::Key::Escape)]);
+        assert_eq!(v, 0.1, "Esc で入力前の値のまま");
+        assert!(!esc.changed && !esc.committed);
+        assert!(!ui_busy(&ctx));
+        // egui はフォーカスが外れてから 2 フレームのあいだ「外れた」と扱う。次のフレームで打った値が入らないこと
+        for _ in 0..3 {
+            let after = frame_coord(&ctx, &mut v, vec![]);
+            assert_eq!(v, 0.1, "Esc の後のフレームでも入力前の値のまま");
+            assert!(!after.changed && !after.committed);
+        }
+    }
+
+    fn select_all() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }
+    }
+
+    /// 整数の欄（スロット・ID と同じ組み方）を 1 フレーム回し、`changed()` を返す。
+    fn frame_slot(ctx: &egui::Context, value: &mut i32, events: Vec<egui::Event>) -> bool {
+        let mut changed = false;
+        run_frame(ctx, raw(events), |ui| {
+            changed = drag_value(ui, value, |d| d.range(1..=9999).speed(0.1)).changed();
+        });
+        changed
+    }
+
+    #[test]
+    fn integer_drag_value_escape_and_enter() {
+        let ctx = egui::Context::default();
+        let mut slot = 3;
+        frame_slot(&ctx, &mut slot, vec![]);
+        frame_slot(&ctx, &mut slot, vec![key(egui::Key::Tab)]);
+        frame_slot(&ctx, &mut slot, vec![select_all(), text("42")]);
+        assert_eq!(slot, 3, "打っている途中の値を使っている");
+        assert!(!frame_slot(&ctx, &mut slot, vec![key(egui::Key::Escape)]));
+        for _ in 0..3 {
+            let changed = frame_slot(&ctx, &mut slot, vec![]);
+            assert_eq!(slot, 3, "Esc の後のフレームでも入力前の値のまま");
+            assert!(!changed, "戻したフレームを「変わった」にしない（set_slot を呼ばない）");
+        }
+
+        frame_slot(&ctx, &mut slot, vec![key(egui::Key::Tab)]);
+        frame_slot(&ctx, &mut slot, vec![select_all(), text("42")]);
+        assert!(frame_slot(&ctx, &mut slot, vec![key(egui::Key::Enter)]));
+        for _ in 0..3 {
+            frame_slot(&ctx, &mut slot, vec![]);
+        }
+        assert_eq!(slot, 42, "Enter で確定した値は残る");
+    }
+
+    /// 減衰比のスライダー（`param_slider`）を 1 フレーム回す。
+    fn frame_slider(ctx: &egui::Context, value: &mut f64, events: Vec<egui::Event>) -> NumericEdits {
+        let mut edits = NumericEdits::default();
+        run_frame(ctx, raw(events), |ui| {
+            edits.record(&param_slider(ui, value, 0.0..=2.0, false, "減衰比 ζ"));
+        });
+        edits
+    }
+
+    /// スライダーの右の数値欄に `typed` を打つ（Tab 1 回目でつまみ、2 回目で数値欄にフォーカスが移る）。
+    fn type_into_slider(ctx: &egui::Context, value: &mut f64, typed: &str) {
+        frame_slider(ctx, value, vec![]);
+        frame_slider(ctx, value, vec![key(egui::Key::Tab)]);
+        frame_slider(ctx, value, vec![key(egui::Key::Tab)]);
+        let typing = frame_slider(ctx, value, vec![select_all(), text(typed)]);
+        assert!(!typing.changed);
+    }
+
+    #[test]
+    fn slider_value_box_escape_and_enter() {
+        let ctx = egui::Context::default();
+        let mut zeta = 0.5;
+        type_into_slider(&ctx, &mut zeta, "1.5");
+        assert_eq!(zeta, 0.5, "打っている途中の値を使っている");
+        assert!(ui_busy(&ctx));
+        let esc = frame_slider(&ctx, &mut zeta, vec![key(egui::Key::Escape)]);
+        assert!(!esc.changed);
+        for _ in 0..3 {
+            let after = frame_slider(&ctx, &mut zeta, vec![]);
+            assert_eq!(zeta, 0.5, "Esc の後のフレームでも入力前の値のまま");
+            assert!(!after.changed && !after.committed);
+        }
+
+        type_into_slider(&ctx, &mut zeta, "1.5");
+        let enter = frame_slider(&ctx, &mut zeta, vec![key(egui::Key::Enter)]);
+        assert!(enter.changed && enter.committed);
+        for _ in 0..3 {
+            frame_slider(&ctx, &mut zeta, vec![]);
+        }
+        assert_eq!(zeta, 1.5, "Enter で確定した値は残る");
+    }
+
+    /// 打ち込みの確定とその後のドラッグは、別々の段になる（`render_controls` と同じ順で確定する）。
+    #[test]
+    fn typed_commit_and_following_drag_are_separate_undo_steps() {
+        let ctx = egui::Context::default();
+        let mut s = EditorState::default();
+        let original = s.bezier.y1;
+        let mut y1 = s.bezier.y1;
+        type_into_coord(&ctx, &mut y1, "0.7");
+        let edits = frame_coord(&ctx, &mut y1, vec![key(egui::Key::Enter)]);
+        assert!(edits.committed);
+        let typed = y1;
+        assert_eq!(typed, 0.7);
+        s.bezier.y1 = typed;
+        s.refresh_code_from_mode();
+        assert!(s.commit_undo_step());
+
+        // 続けてグラフでドラッグした（ボタンを離したときに確定）
+        s.bezier.y1 = 0.25;
+        s.refresh_code_from_mode();
+        assert!(s.commit_undo_step());
+
+        assert!(s.undo_edit());
+        assert!((s.bezier.y1 - typed).abs() < 1e-12, "1 回目の Undo はドラッグだけを戻す");
+        assert!(s.undo_edit());
+        assert!((s.bezier.y1 - original).abs() < 1e-12, "2 回目で打ち込みを戻す");
+    }
+
+    #[test]
+    fn escape_dismisses_panels_only_when_nothing_was_focused() {
+        assert!(esc_dismisses(true, false));
+        assert!(!esc_dismisses(true, true), "入力中・ポップアップ表示中の Esc はそちらだけに効く");
+        assert!(!esc_dismisses(false, false));
     }
 }
