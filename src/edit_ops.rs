@@ -149,20 +149,34 @@ pub fn track_has_no_motion(value: &str) -> bool {
     parse_track_values(value).is_some_and(|values| values.len() == 1)
 }
 
-pub fn build_motion_track_value(section: &str, slot: i32, existing: Option<&str>) -> String {
+/// 設定のビット 4（中間点無視）
+const BIT_IGNORE_MIDPOINTS: u32 = 4;
+
+/// `points` はオブジェクトの点（開始・中間点・終了）の数（`get_object_section_num` + 1）。分からなければ None。
+///
+/// **値の数は点の数に合わせる。** 本体は数を検査せずに保存し、合わないと動きが変わる（ルール `au2-rs-plugin`「設定項目の値の形式」）。
+/// - 固定値（値 1 つ）は、点の数だけ同じ値を並べる（中間点が無ければ開始＝終了の 2 値。本体で移動方法を選んだときと同じ形）
+/// - 値が 2 つで点が 3 つ以上なら、中間点無視（設定のビット 4）か再生範囲で 2 つに切り詰められたトラック。
+///   中間点無視を立てたまま書く（外すと最初の区間だけ動いて後は止まる）
+/// - 既に中間点無視が立っていれば、移動方法を切り替えても残す
+pub fn build_motion_track_value(section: &str, slot: i32, existing: Option<&str>, points: Option<usize>) -> String {
     let motion = motion_label_for_section(section);
-    // 値の並びはそのまま引き継ぐ（中間点があれば個数が増える）。
-    // 固定値（値 1 つ）のトラックは開始＝終了の 2 値へ広げる。
-    // ホストで移動方法を選んだときと同じ形になり、あとは終了値を変えるだけで済む。
     let mut values = existing
         .and_then(parse_track_values)
         .unwrap_or_else(|| vec!["0".to_string(), "1".to_string()]);
     if values.len() == 1 {
-        values.push(values[0].clone());
+        let n = points.unwrap_or(2).max(2);
+        values = vec![values[0].clone(); n];
     }
+    let had_ignore_bit = existing
+        .and_then(split_motion)
+        .and_then(|(_, param)| param.split('|').next()?.trim().parse::<u32>().ok())
+        .is_some_and(|bits| bits & BIT_IGNORE_MIDPOINTS != 0);
+    let ignore_midpoints = had_ignore_bit || points.is_some_and(|p| p > 2 && values.len() == 2);
     let values = values.join(",");
+    let base_bits = if ignore_midpoints { BIT_IGNORE_MIDPOINTS } else { 0 };
 
-    // 別の移動方法から引き継いだパラメータは捨てる（加減速のビットや設定値の意味が違う）。
+    // 別の移動方法から引き継いだパラメータは捨てる（加減速のビットや設定値の意味が違う）。中間点無視だけは残す。
     // すでに Live のセクション（`カーブエディタ2` / `区間ごとにスロットを進める` / `全体で1本`）の
     // トラックなら、そのセクションのまま設定欄（`加減速|スロット|時間制御`。.tra2 v1.10）の
     // スロットだけを差し替え、利用者が付けた加減速・時間制御を消さない。
@@ -170,13 +184,26 @@ pub fn build_motion_track_value(section: &str, slot: i32, existing: Option<&str>
         let kept = existing
             .and_then(split_motion)
             .filter(|(m, _)| is_live_motion(m))
-            .and_then(|(m, param)| replace_live_slot(param, slot).map(|p| (m.to_string(), p)));
+            .and_then(|(m, param)| replace_live_slot(param, slot).map(|p| (m.to_string(), p)))
+            .map(|(m, param)| (m, if ignore_midpoints { set_bits(&param, BIT_IGNORE_MIDPOINTS) } else { param }));
         match kept {
             Some((m, param)) => format!("{values},{m},{param}"),
-            None => format!("{values},{motion},0|{slot}"),
+            None => format!("{values},{motion},{base_bits}|{slot}"),
         }
     } else {
-        format!("{values},{motion},0")
+        format!("{values},{motion},{base_bits}")
+    }
+}
+
+/// 設定欄の先頭（ビット）に `bits` を立てる。先頭が数値でなければそのまま返す
+fn set_bits(param: &str, bits: u32) -> String {
+    let (head, tail) = param.split_once('|').map_or((param, None), |(h, t)| (h, Some(t)));
+    match head.trim().parse::<u32>() {
+        Ok(b) => match tail {
+            Some(t) => format!("{}|{t}", b | bits),
+            None => format!("{}", b | bits),
+        },
+        Err(_) => param.to_string(),
     }
 }
 
@@ -477,13 +504,12 @@ pub fn apply_to_track(
             target.label, target.track_value
         ));
     }
-    let new_value = build_motion_track_value(&section, slot, Some(&target.track_value));
+    let section = section.to_string();
     let effect_name = target.effect_name.clone();
     let effect_index = target.effect_index;
     let alias_index = target.alias_index;
     let item_name = target.item_name.clone();
     let old_value = target.track_value.clone();
-    let written_value = new_value.clone();
     with_edit_section("apply_to_track", move |edit| {
         let Some(obj_handle) = edit
             .get_focused_object()
@@ -491,6 +517,9 @@ pub fn apply_to_track(
         else {
             return Err("フォーカス中のオブジェクトがありません".into());
         };
+        // 値の数を点の数に合わせるため、書く直前に中間点の数を読む
+        let points = edit.get_object_section_num(obj_handle).ok().map(|n| n + 1);
+        let new_value = build_motion_track_value(&section, slot, Some(&old_value), points);
         let object = edit.object(obj_handle);
 
         // `":n"` の解釈がホスト側で確定していないので、書く前に読んで狙いを定める。
@@ -547,7 +576,7 @@ pub fn apply_to_track(
         // 書けたと言われても値が入っていないことがあるので読み返す。
         // 「エラーは出ないのに移動方法が変わらない」を成功として報告しない。
         match object.get_effect_item(&effect_name, idx, &item_name) {
-            Ok(written) if written == new_value => Ok(()),
+            Ok(written) if written == new_value => Ok(new_value),
             Ok(written) => {
                 tracing::warn!(
                     effect = %effect_name, idx, item = %item_name,
@@ -564,11 +593,10 @@ pub fn apply_to_track(
                     effect = %effect_name, idx, item = %item_name, error = ?e,
                     "apply_to_track: read back failed"
                 );
-                Ok(())
+                Ok(new_value)
             }
         }
     })
-    .map(|()| written_value)
 }
 
 /// 今のシーンの使用箇所を、本体の今の状態（オブジェクトエイリアス）から拾う（v0.9.5）。
@@ -741,22 +769,22 @@ effect.name=色調補正@Basic_S
     /// Live スロットの書き込み値。既存の値の並びを引き継ぐ。
     #[test]
     fn build_motion_track_value_keeps_values() {
-        let v = build_motion_track_value(LIVE_SECTION, 3, Some("-200.00,0.00,直線移動,0"));
+        let v = build_motion_track_value(LIVE_SECTION, 3, Some("-200.00,0.00,直線移動,0"), None);
         assert!(v.starts_with("-200.00,0.00,"), "endpoints kept: {v}");
         assert!(v.ends_with(",0|3"), "param and slot: {v}");
 
         // 中間点は個数を保つ（3 値のまま）
-        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,50.00,100.00,直線移動,0"));
+        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,50.00,100.00,直線移動,0"), None);
         assert!(v.starts_with("0.00,50.00,100.00,"), "keyframes kept: {v}");
 
         // 固定値は開始＝終了の 2 値へ広げる（音量調整 の 音量 が通るようになる）
-        let v = build_motion_track_value(LIVE_SECTION, 2, Some("100.00"));
+        let v = build_motion_track_value(LIVE_SECTION, 2, Some("100.00"), None);
         assert_eq!(v, "100.00,100.00,カーブエディタ2@カーブエディタ2,0|2");
 
         // 他の移動方法のパラメータは引き継がない（加減速のビットや設定値の意味が違う）
-        let v = build_motion_track_value(LIVE_SECTION, 1, Some("95.00,移動無し,8|10^@min(音量/20-3,2)"));
+        let v = build_motion_track_value(LIVE_SECTION, 1, Some("95.00,移動無し,8|10^@min(音量/20-3,2)"), None);
         assert_eq!(v, "95.00,95.00,カーブエディタ2@カーブエディタ2,0|1");
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some("-200.00,0.00,指数関数@Basic_S,2|6"));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some("-200.00,0.00,指数関数@Basic_S,2|6"), None);
         assert_eq!(v, "-200.00,0.00,カーブエディタ2@カーブエディタ2,0|7");
     }
 
@@ -765,16 +793,17 @@ effect.name=色調補正@Basic_S
     fn build_motion_track_value_keeps_live_settings() {
         let live = "カーブエディタ2@カーブエディタ2";
         // v1.0 の形
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,100.00,{live},0|5")));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,100.00,{live},0|5")), None);
         assert_eq!(v, format!("0.00,100.00,{live},0|7"));
         // 実制作にある 4|スロット（ビットの意味は未確認。そのまま残す）
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.000,1.000,{live},4|1")));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.000,1.000,{live},4|1")), None);
         assert_eq!(v, format!("0.000,1.000,{live},4|7"));
         // 加減速・時間制御つき、中間点あり
         let v = build_motion_track_value(
             LIVE_SECTION,
             12,
             Some(&format!("0.00,50.00,10.00,{live},3|5|0,0.511224,1,0")),
+            None,
         );
         assert_eq!(v, format!("0.00,50.00,10.00,{live},3|12|0,0.511224,1,0"));
         // Live の別セクションはセクションのまま
@@ -782,21 +811,51 @@ effect.name=色調補正@Basic_S
             LIVE_SECTION,
             9,
             Some("0.00,50.00,10.00,全体で1本@カーブエディタ2,2|4|0,0.511224,1,0"),
+            None,
         );
         assert_eq!(v, "0.00,50.00,10.00,全体で1本@カーブエディタ2,2|9|0,0.511224,1,0");
-        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|1"));
+        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|1"), None);
         assert_eq!(v, "0.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|3");
         // 設定値はスロット 1 つだけに揃える（数が合わないとホストが全部を既定値に戻す）
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},0|5,1")));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},0|5,1")), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
         // 組み込み（スロットを使わない）セクションからは Live の 0|スロット に切り替える
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some("0.00,1.00,バウンス@カーブエディタ2,0"));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some("0.00,1.00,バウンス@カーブエディタ2,0"), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
         // 形が崩れていれば 0|スロット に戻す
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},x|5")));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},x|5")), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},0|a")));
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},0|a")), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
+    }
+
+    /// 値の数を点の数に合わせる（公開前チェックリストの点検、`issues/20261010_publish_checklist_audit.md`）
+    #[test]
+    fn build_motion_track_value_matches_points() {
+        let live = "カーブエディタ2@カーブエディタ2";
+        // 固定値は点の数だけ並べる（中間点 1 つ = 点 3 つ）
+        let v = build_motion_track_value(LIVE_SECTION, 2, Some("100.00"), Some(3));
+        assert_eq!(v, format!("100.00,100.00,100.00,{live},0|2"));
+        // 中間点無視で 2 つに切り詰められたトラックは、ビット 4 を残したまま書く
+        let v = build_motion_track_value(LIVE_SECTION, 5, Some("0.00,100.00,直線移動,4"), Some(4));
+        assert_eq!(v, format!("0.00,100.00,{live},4|5"));
+        // 再生範囲（ビットは無いが値 2 つ）で点が 3 つ以上なら、中間点無視を立てる
+        let v = build_motion_track_value(LIVE_SECTION, 5, Some("0.00,100.00,再生範囲,0"), Some(3));
+        assert_eq!(v, format!("0.00,100.00,{live},4|5"));
+        // Live のまま中間点無視が付いていれば残す（加減速のビットも残す）
+        let v = build_motion_track_value(LIVE_SECTION, 8, Some(&format!("0.00,100.00,{live},7|5")), Some(4));
+        assert_eq!(v, format!("0.00,100.00,{live},7|8"));
+        // Live で値 2 つ・点 3 つ・ビット無しなら、ビット 4 を足す
+        let v = build_motion_track_value(LIVE_SECTION, 8, Some(&format!("0.00,100.00,{live},1|5")), Some(3));
+        assert_eq!(v, format!("0.00,100.00,{live},5|8"));
+        // 点の数と合っていれば何も足さない
+        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,50.00,100.00,直線移動,0"), Some(3));
+        assert_eq!(v, format!("0.00,50.00,100.00,{live},0|3"));
+        // 組み込みのセクション（スロット無し）でも同じ
+        let v = build_motion_track_value("バウンス", 0, Some("0.00,100.00,直線移動,4"), Some(5));
+        assert!(v.ends_with(",4"), "{v}");
+        assert_eq!(set_bits("2|9|0,1", 4), "6|9|0,1");
+        assert_eq!(set_bits("x|9", 4), "x|9");
     }
 
     #[test]

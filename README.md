@@ -77,7 +77,7 @@ CurveEditor2 は専用のトラックバー移動スクリプト **`@カーブ�
 
 ## 導入
 
-1. [Releases](https://github.com/HexBrowns/CurveEditor2/releases) から `HexBrowns.CurveEditor2-v0.9.9.au2pkg.zip` をダウンロードし、AviUtl2 のプレビューへドラッグ&ドロップする
+1. [Releases](https://github.com/HexBrowns/CurveEditor2/releases) から `HexBrowns.CurveEditor2-v0.9.10.au2pkg.zip` をダウンロードし、AviUtl2 のプレビューへドラッグ&ドロップする
    （手で置くなら、中の `Plugin` フォルダと `Script` フォルダを、AviUtl2 のデータフォルダ（既定は `C:\ProgramData\aviutl2`）へコピーする）。
    次の 2 つが置かれます
    - `Plugin\CurveEditor2\CurveEditor2.aux2`
@@ -137,6 +137,11 @@ au2 release
 すでに Live のセクションが付いているトラックへ「このトラックに適用」すると、
 **セクションはそのままでスロット番号だけを差し替え、加減速・時間制御の設定は残します**（v0.9.1〜）。
 ほかの移動方法から切り替えたときは `カーブエディタ2@カーブエディタ2` の `0|N`（設定なし）で書きます。
+
+中間点のあるオブジェクトへの適用（v0.9.10〜）:
+
+- 固定値のトラックは、点（開始・中間点・終了）の数だけ同じ値を並べて書きます。v0.9.9 までは値 2 つで書いていたので、中間点のあるオブジェクトでは点の数と合いませんでした
+- **中間点無視** を付けたトラック（と、値が 2 つの再生範囲）へ適用すると、中間点無視を残したまま書きます（オブジェクト全体で 1 本のカーブ）。v0.9.9 までは中間点無視が外れ、最初の区間だけ動いて後は止まりました
 
 #### Live の 3 つの移動方法（`.tra2` v1.10〜）
 

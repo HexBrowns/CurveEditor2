@@ -234,14 +234,36 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
         let path = project.get_path();
         let settings = project.deserialize::<PluginSettings>(SETTINGS_SERDE_KEY).ok();
 
+        // 読めなかったライブラリを、保存で今の中身に上書きしない（ルール `au2-plugin-checklist`「設定ファイルの下位互換」）
         let mut loaded = CurveLibrary::default();
-        if let Ok(lib) = project.deserialize::<CurveLibrary>(PROJECT_SERDE_KEY) {
-            merge_libraries(&mut loaded, &lib);
+        let mut embedded_keep = None;
+        match project.deserialize::<CurveLibrary>(PROJECT_SERDE_KEY) {
+            Ok(lib) => merge_libraries(&mut loaded, &lib),
+            // キーがあるのに読めない。元の文字列（見出しと分割した中身）を持っておき、保存ではそのまま書き戻す
+            Err(e) if project.get_param_string(PROJECT_SERDE_KEY).is_ok() => {
+                tracing::warn!("CurveEditor2: プロジェクトのカーブライブラリを読めませんでした。保存しても書き換えません: {e}");
+                embedded_keep = Some(raw_project_params(project, PROJECT_SERDE_KEY));
+            }
+            // キーが無い（ライブラリを持たないプロジェクト）
+            Err(_) => {}
         }
         // プロジェクトごとのライブラリ。無ければフォルダに 1 つの以前のものを引き継ぐ（保存はプロジェクトごとの方へ）
+        let mut file_write_blocked = false;
         if let Some(lib_path) = library_file_to_load(path.as_deref()) {
-            if let Ok(file_lib) = curve_library::load_library_file(&lib_path) {
-                merge_libraries(&mut loaded, &file_lib);
+            match curve_library::load_library_file(&lib_path) {
+                Ok(file_lib) => merge_libraries(&mut loaded, &file_lib),
+                Err(e) => match curve_library::backup_broken_file(&lib_path) {
+                    Ok(dest) => tracing::warn!(
+                        "CurveEditor2: カーブライブラリを読めなかったので {} へ退避しました: {e:#}",
+                        dest.display()
+                    ),
+                    Err(be) => {
+                        tracing::warn!(
+                            "CurveEditor2: カーブライブラリを読めず、退避もできませんでした。このプロジェクトの間は書きません: {e:#} / {be}"
+                        );
+                        file_write_blocked = true;
+                    }
+                },
             }
         }
 
@@ -257,6 +279,8 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             }
             state.load_project_live();
             state.curve_library = loaded;
+            state.library_embedded_keep = embedded_keep;
+            state.library_file_write_blocked = file_write_blocked;
             state.load_curve_from_library(false);
             if state.slot_id_linked {
                 state.sync_slot_to_id();
@@ -292,7 +316,7 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
         // 外から active に書かれたスロット（ClaudeBridge の set_custom_curve など）を取り込んでから書く。
         // 取り込まないと 1 分ごとの自動バックアップで消える（issues/20260927_external_live_slots_lost_on_save.md）
         let st = &mut *state;
-        let project_path = st.project_path.clone();
+        let project_path = st.live_write_project_path();
         match storage::sync_live_to_disk_adopting(
             project_path.as_deref(),
             &mut st.live_slots,
@@ -312,9 +336,36 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
     }
 }
 
+/// aviutl2-rs の `serialize` が書く文字列（見出しのキーと、`--aviutl2-rs:serde-base64-chunk:{key}:{n}` に分けた中身）を
+/// そのまま集める。読めなかったライブラリを保存で消さずに書き戻すため
+fn raw_project_params(project: &aviutl2::generic::ProjectFile, key: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Ok(v) = project.get_param_string(key) {
+        out.push((key.to_string(), v));
+    }
+    for i in 0.. {
+        let chunk_key = format!("--aviutl2-rs:serde-base64-chunk:{key}:{i}");
+        match project.get_param_string(&chunk_key) {
+            Ok(v) => out.push((chunk_key, v)),
+            Err(_) => break,
+        }
+    }
+    out
+}
+
 fn save_curve_library(project: &mut aviutl2::generic::ProjectFile, state: &EditorState) {
-    if let Err(e) = project.serialize(PROJECT_SERDE_KEY, &state.curve_library) {
+    if let Some(raw) = &state.library_embedded_keep {
+        // 読めなかった埋め込みのライブラリは、元の文字列のまま書き戻す（新しいカーブはファイルの方に入る）
+        for (k, v) in raw {
+            if let Err(e) = project.set_param_string(k, v) {
+                tracing::warn!("curve library project keep failed: {k}: {e}");
+            }
+        }
+    } else if let Err(e) = project.serialize(PROJECT_SERDE_KEY, &state.curve_library) {
         tracing::warn!("curve library project serialize failed: {e}");
+    }
+    if state.library_file_write_blocked {
+        return;
     }
     if let Some(path) = library_file_path(state.project_path.as_deref()) {
         if let Err(e) = save_library_file(&path, &state.curve_library) {

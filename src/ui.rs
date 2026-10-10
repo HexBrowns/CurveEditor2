@@ -373,6 +373,13 @@ pub struct EditorState {
     /// こちらが前回 active に書いた（読んだ）Live。外から書かれたスロットを見分けるのに使う
     /// （`storage::adopt_external_live`）
     pub live_disk_base: HashMap<i32, String>,
+    /// プロジェクトの Live が読めなかった。その間はプロジェクトの Live を書かない
+    /// （書くと読めなかったファイルを空や別のプロジェクトの中身で上書きする。公開前チェックリストの点検）
+    pub live_project_write_blocked: bool,
+    /// プロジェクトに埋め込んだライブラリが読めなかったときの元の文字列。保存ではこれをそのまま書き戻す
+    pub library_embedded_keep: Option<Vec<(String, String)>>,
+    /// ライブラリのファイルが読めず、退避もできなかった。その間はファイルを書かない
+    pub library_file_write_blocked: bool,
     pub presets: Vec<(String, String)>,
     pub project_path: Option<PathBuf>,
     pub selected_category: String,
@@ -459,6 +466,9 @@ impl Default for EditorState {
             // プロジェクトを読み込んだとき（load_project_live）に active の中身で置き換える。
             // ここでファイルを読むとホストの外（単体テスト）でアプリのデータのパスが取れずに落ちる
             live_disk_base: HashMap::new(),
+            live_project_write_blocked: false,
+            library_embedded_keep: None,
+            library_file_write_blocked: false,
             presets: Vec::new(),
             project_path: None,
             selected_category: String::new(),
@@ -599,7 +609,7 @@ impl EditorState {
         let slot = self.effective_live_slot();
         let code = self.current_code();
         self.live_slots.insert(slot, code);
-        let project_path = self.project_path.clone();
+        let project_path = self.live_write_project_path();
         storage::sync_live_to_disk_adopting(
             project_path.as_deref(),
             &mut self.live_slots,
@@ -696,7 +706,29 @@ impl EditorState {
                 // 以後、この中身から変わったスロットを「外から書かれたもの」とみなす
                 self.live_disk_base = storage::read_active_live();
             }
-            Err(e) => self.status_message = format!("Live読込エラー: {e}"),
+            Err(e) => {
+                // 前のプロジェクトのスロットを残すと、保存でそれがこのプロジェクトの Live に書かれる。
+                // 空にして、このプロジェクトの Live は書かない（読めなかったファイルを残す）
+                tracing::warn!("CurveEditor2: プロジェクトの Live を読めませんでした。このプロジェクトの Live は書きません: {e:#}");
+                self.live_slots.clear();
+                self.live_project_write_blocked = true;
+                if let Err(e) = storage::write_active_live(&self.live_slots) {
+                    tracing::warn!("CurveEditor2: active Live 書き出し失敗: {e:#}");
+                }
+                self.live_disk_base = storage::read_active_live();
+                self.status_message = format!("Live読込エラー（このプロジェクトの Live は書きません）: {e}");
+                return;
+            }
+        }
+        self.live_project_write_blocked = false;
+    }
+
+    /// Live を書くときのプロジェクトのパス。読めなかったプロジェクトなら None（active だけ書く）
+    pub fn live_write_project_path(&self) -> Option<PathBuf> {
+        if self.live_project_write_blocked {
+            None
+        } else {
+            self.project_path.clone()
         }
     }
 
@@ -1153,7 +1185,7 @@ impl CurveEditor2App {
                             (
                                 s.current_code(),
                                 s.effective_live_slot(),
-                                s.project_path.clone(),
+                                s.live_write_project_path(),
                             )
                         });
                     Some((target, section, slot, live_sync))
