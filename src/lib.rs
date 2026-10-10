@@ -21,7 +21,7 @@ use curve_library::{
 };
 use edit_ops::EDIT_HANDLE;
 use serde::{Deserialize, Serialize};
-use ui::{CurveEditor2App, EditorState, SharedState};
+use ui::{CurveEditorHApp, EditorState, SharedState};
 
 pub const SETTINGS_SERDE_KEY: &str = "curveeditor2/settings";
 
@@ -103,14 +103,14 @@ fn init_logging() {
 }
 
 #[aviutl2::plugin(GenericPlugin)]
-pub struct CurveEditor2Plugin {
+pub struct CurveEditorHPlugin {
     /// 起動時は None。register() で非表示ウィンドウを作成し、表示はメニュー操作時。
     window: Mutex<Option<aviutl2_eframe::EframeWindow>>,
     state: SharedState,
     window_created: AtomicBool,
 }
 
-impl CurveEditor2Plugin {
+impl CurveEditorHPlugin {
     fn ensure_window(&self) -> AnyResult<()> {
         if self.window_created.load(Ordering::Acquire) {
             return Ok(());
@@ -121,18 +121,20 @@ impl CurveEditor2Plugin {
             return Ok(());
         }
         let state = Arc::clone(&self.state);
-        *guard = Some(aviutl2_eframe::EframeWindow::new("CurveEditor2", move |cc, handle| {
-            Ok(Box::new(CurveEditor2App::new(cc, handle, state)))
+        *guard = Some(aviutl2_eframe::EframeWindow::new("CurveEditor_H", move |cc, handle| {
+            Ok(Box::new(CurveEditorHApp::new(cc, handle, state)))
         })?);
         self.window_created.store(true, Ordering::Release);
         Ok(())
     }
 }
 
-impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
+impl aviutl2::generic::GenericPlugin for CurveEditorHPlugin {
     fn new(_info: aviutl2::AviUtl2Info) -> AnyResult<Self> {
         init_logging();
-        tracing::info!("CurveEditor2 v{} 初期化", env!("CARGO_PKG_VERSION"));
+        tracing::info!("CurveEditor_H v{} 初期化", env!("CARGO_PKG_VERSION"));
+        // これより新しい .tra2 は、本体に登録されていないとみなす（本体は .tra2 を起動時に読む）
+        motion_registry::mark_loaded();
         let state: SharedState = Arc::new(RwLock::new(EditorState::default()));
         Ok(Self {
             window: Mutex::new(None),
@@ -143,9 +145,9 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
 
     fn plugin_info(&self) -> aviutl2::generic::GenericPluginTable {
         aviutl2::generic::GenericPluginTable {
-            name: "CurveEditor2".to_string(),
+            name: "CurveEditor_H".to_string(),
             information: format!(
-                "CurveEditor2 v{version} - Easing editor / by HexBrowns",
+                "CurveEditor_H v{version} - Easing editor / by HexBrowns",
                 version = env!("CARGO_PKG_VERSION")
             ),
         }
@@ -155,29 +157,33 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
         EDIT_HANDLE.init(registry.create_edit_handle());
         // get_effects() は起動直後に呼ぶと enum_effect_name 例外を踏みやすい。
         // 初回トラック取得時に遅延ウォームする（edit_ops 側）。
-        match motion_registry::ensure_movements_registered() {
-            Ok(n) if n > 0 => {
-                tracing::info!("CurveEditor2: aviutl2.ini に Movement を {n} 件登録");
-                self.state.write().status_message =
-                    motion_registry::RESTART_REQUIRED_MESSAGE.to_string();
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!("CurveEditor2: Movement 登録スキップ: {e:#}"),
+        // 移動方法は本体が起動時に .tra2 から登録する。aviutl2.ini には書かない（v0.9.11 までは追記していた）。
+        // 登録されていないものがあれば知らせるだけにする（適用の前にも確かめる）
+        let missing = motion_registry::missing_movements(&motion_registry::scan_installed());
+        if !missing.is_empty() {
+            tracing::warn!(
+                "CurveEditor_H: 本体に登録されていない移動方法があります（.tra2 を置き直して再起動）: {}",
+                missing.join(", ")
+            );
+            self.state.write().status_message = format!(
+                "移動方法 {} 件が本体に登録されていません。Script/CurveEditor_H/@カーブエディタ_H.tra2 を置き直し、AviUtl2 を再起動してください。",
+                missing.len()
+            );
         }
         // 表示メニュー／ウィンドウ配置パネル用に register_window_client が必要。
         // ウィンドウ本体は非表示のまま起動し、表示は表示メニューの操作時に本体が行う。
         if let Err(e) = self.ensure_window() {
-            tracing::error!("CurveEditor2 ウィンドウ初期化失敗: {e:#}");
+            tracing::error!("CurveEditor_H ウィンドウ初期化失敗: {e:#}");
         } else {
             let guard = self.window.lock();
             if let Some(window) = guard.as_ref() {
                 match window.handle() {
                     Ok(handle) => {
-                        if let Err(e) = registry.register_window_client("CurveEditor2", &handle) {
+                        if let Err(e) = registry.register_window_client("CurveEditor_H", &handle) {
                             tracing::error!("register_window_client 失敗: {e}");
                         }
                     }
-                    Err(e) => tracing::error!("CurveEditor2 ハンドル取得失敗: {e:#}"),
+                    Err(e) => tracing::error!("CurveEditor_H ハンドル取得失敗: {e:#}"),
                 }
             }
         }
@@ -207,7 +213,7 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             Ok(lib) => merge_libraries(&mut loaded, &lib),
             // キーがあるのに読めない。元の文字列（見出しと分割した中身）を持っておき、保存ではそのまま書き戻す
             Err(e) if project.get_param_string(PROJECT_SERDE_KEY).is_ok() => {
-                tracing::warn!("CurveEditor2: プロジェクトのカーブライブラリを読めませんでした。保存しても書き換えません: {e}");
+                tracing::warn!("CurveEditor_H: プロジェクトのカーブライブラリを読めませんでした。保存しても書き換えません: {e}");
                 embedded_keep = Some(raw_project_params(project, PROJECT_SERDE_KEY));
             }
             // キーが無い（ライブラリを持たないプロジェクト）
@@ -220,12 +226,12 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
                 Ok(file_lib) => merge_libraries(&mut loaded, &file_lib),
                 Err(e) => match curve_library::backup_broken_file(&lib_path) {
                     Ok(dest) => tracing::warn!(
-                        "CurveEditor2: カーブライブラリを読めなかったので {} へ退避しました: {e:#}",
+                        "CurveEditor_H: カーブライブラリを読めなかったので {} へ退避しました: {e:#}",
                         dest.display()
                     ),
                     Err(be) => {
                         tracing::warn!(
-                            "CurveEditor2: カーブライブラリを読めず、退避もできませんでした。このプロジェクトの間は書きません: {e:#} / {be}"
+                            "CurveEditor_H: カーブライブラリを読めず、退避もできませんでした。このプロジェクトの間は書きません: {e:#} / {be}"
                         );
                         file_write_blocked = true;
                     }
@@ -255,11 +261,11 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             state.reset_undo_history();
             state.status_message = match &path {
                 Some(p) => format!(
-                    "プロジェクト読込: {} (ライブラリ {} 件) - 表示\u{2192}CurveEditor2",
+                    "プロジェクト読込: {} (ライブラリ {} 件) - 表示\u{2192}CurveEditor_H",
                     p.display(),
                     state.curve_library.defined_count()
                 ),
-                None => "プロジェクト読込（パスなし）- 表示\u{2192}CurveEditor2".to_string(),
+                None => "プロジェクト読込（パスなし）- 表示\u{2192}CurveEditor_H".to_string(),
             };
         }
     }
@@ -291,7 +297,7 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             Err(e) => st.status_message = format!("保存時Live同期エラー: {e}"),
             Ok(adopted) => {
                 if !adopted.is_empty() {
-                    tracing::info!(?adopted, "CurveEditor2: 外から書かれた Live スロットを取り込んだ");
+                    tracing::info!(?adopted, "CurveEditor_H: 外から書かれた Live スロットを取り込んだ");
                 }
                 st.status_message = format!(
                     "保存完了 (ライブラリ {} 件)",
@@ -340,7 +346,7 @@ fn save_curve_library(project: &mut aviutl2::generic::ProjectFile, state: &Edito
     }
 }
 
-aviutl2::register_generic_plugin!(CurveEditor2Plugin);
+aviutl2::register_generic_plugin!(CurveEditorHPlugin);
 
 #[cfg(test)]
 mod log_tests {
@@ -374,11 +380,11 @@ mod log_tests {
         aviutl2::tracing::subscriber::with_default(sub, || {
             aviutl2::tracing::warn!(target: "aviutl2::generic::binding::edit_handle", "Unknown effect item type: 17");
             aviutl2::tracing::error!(target: "aviutl2::generic::binding::edit_handle", "edit handle error");
-            aviutl2::tracing::warn!("curve_editor2 warning");
+            aviutl2::tracing::warn!("curve_editor_h warning");
         });
         let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
         assert!(!out.contains("Unknown effect item type"), "{out}");
         assert!(out.contains("edit handle error"), "{out}");
-        assert!(out.contains("curve_editor2 warning"), "{out}");
+        assert!(out.contains("curve_editor_h warning"), "{out}");
     }
 }

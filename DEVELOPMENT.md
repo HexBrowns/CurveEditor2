@@ -1,16 +1,16 @@
-# CurveEditor2
+# CurveEditor_H
 
-AviUtl2 向けイージングエディタ（Rust 製 `.aux2`）。専用トラックバー移動スクリプト `@カーブエディタ2.tra2` と連携します。
+AviUtl2 向けイージングエディタ（Rust 製 `.aux2`）。専用トラックバー移動スクリプト `@カーブエディタ_H.tra2` と連携します。
 
-- **バージョン:** 0.9.8（aviutl2-rs 0.47 / `@カーブエディタ2.tra2` v1.10）
-- **`.tra2` の正本:** `assets/@カーブエディタ2.tra2`（`aviutl2.toml` の同梱物として `Script/CurveEditor2/` へ配置する。検証器 `AI/scripts/CurveEditor2/verify_tra2.py`）
+- **バージョン:** 0.9.8（aviutl2-rs 0.47 / `@カーブエディタ_H.tra2` v1.10）
+- **`.tra2` の正本:** `assets/@カーブエディタ_H.tra2`（`aviutl2.toml` の同梱物として `Script/CurveEditor_H/` へ配置する。検証器 `AI/scripts/CurveEditor_H/verify_tra2.py`）
 - **依存:** `aviutl2` / `aviutl2-eframe` **0.47**（ホスト AviUtl2 **2.1.10** 以上）
 
 ## ビルド
 
 ```powershell
-python AI/tools/au2_build.py CurveEditor2               # au2 release → 本番（C:\ProgramData\aviutl2）へ配置
-python AI/tools/au2_build.py CurveEditor2 --no-deploy   # 配置しない（本番との違いだけ出す）
+python AI/tools/au2_build.py CurveEditor_H               # au2 release → 本番（C:\ProgramData\aviutl2）へ配置
+python AI/tools/au2_build.py CurveEditor_H --no-deploy   # 配置しない（本番との違いだけ出す）
 ```
 
 ビルドと同梱物は `aviutl2.toml`（[aviutl2-cli](https://github.com/sevenc-nanashi/aviutl2-cli)）が正本。このフォルダで `au2 release` だけを実行すると `release/` に au2pkg ができる。
@@ -19,9 +19,9 @@ python AI/tools/au2_build.py CurveEditor2 --no-deploy   # 配置しない（本�
 
 | 成果物 | デプロイ先 |
 |--------|-----------|
-| `CurveEditor2.aux2` | `Plugin/CurveEditor2/` |
-| `@カーブエディタ2.tra2` | `Script/CurveEditor2/` |
-| Live / プリセット | `Plugin/CurveEditor2/` |
+| `CurveEditor_H.aux2` | `Plugin/CurveEditor_H/` |
+| `@カーブエディタ_H.tra2` | `Script/CurveEditor_H/` |
+| Live / プリセット | `Plugin/CurveEditor_H/` |
 
 Live / プリセットは本体のデータフォルダ（通常は `C:\ProgramData\aviutl2`。本体の隣に `data` フォルダを作った環境ではそこ）の下に置く。
 `.tra2` はデータフォルダを `obj.getinfo("script_path")` から求めて Live を読む（求められないときは `C:\ProgramData\aviutl2`）。
@@ -59,4 +59,4 @@ Live / プリセットは本体のデータフォルダ（通常は `C:\ProgramD
    **Shift+ドラッグ** でハンドルが交点へスナップ、**Shift+ダブルクリック** で交点にアンカー追加
 9. ベジェ／マルチ／複合の端点 Y をグラフでドラッグ可能。右ドラッグパンは掴み方向に追従
 
-ユーザー向け詳細: [`自作スクリプトマニュアル/CurveEditor2_Manual.md`](../../自作スクリプトマニュアル/CurveEditor2_Manual.md)
+ユーザー向け詳細: [`自作スクリプトマニュアル/CurveEditor_H_Manual.md`](../../自作スクリプトマニュアル/CurveEditor_H_Manual.md)

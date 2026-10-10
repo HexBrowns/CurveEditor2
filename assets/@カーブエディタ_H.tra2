@@ -1,11 +1,11 @@
 -- ============================================================================
--- @カーブエディタ2.tra2  v1.10 by HexBrowns
--- CurveEditor2 専用トラックバー移動スクリプト（ScriptCurve とは独立）
--- 正本: AI/plugins/CurveEditor2/assets/@カーブエディタ2.tra2（build.ps1 が Script/CurveEditor2/ へ配置する）
+-- @カーブエディタ_H.tra2  v1.20 by HexBrowns
+-- CurveEditor_H 専用トラックバー移動スクリプト（ScriptCurve とは独立）
+-- 正本: AI/plugins/CurveEditor_H/assets/@カーブエディタ_H.tra2（build.ps1 が Script/CurveEditor_H/ へ配置する）
 -- ============================================================================
 --
 -- 【セクション一覧】
---   カーブエディタ2              ← Live スロット連携（CurveEditor2.aux2）。区間ごとに同じカーブ
+--   カーブエディタ_H              ← Live スロット連携（CurveEditor_H.aux2）。区間ごとに同じカーブ
 --   区間ごとにスロットを進める    ← 同上。中間点で区切った k 番目の区間は スロット + k（k は 0 始まり）。v1.10
 --   全体で1本                    ← 同上。開始点から終了点までの時間に 1 本のカーブを掛け、中間点の値は直線でつなぐ。v1.10
 --   バウンス
@@ -19,12 +19,12 @@
 --   スプリング          ← 減衰比・角周波数を設定
 --   パーリン揺らぎ      ← オクターブ・周波数を設定
 --   （v1.10 で「加減速」セクションを外した。実制作での使用 0 件で、
---     カーブエディタ2 の加速・減速と役目が重なるため）
+--     カーブエディタ_H の加速・減速と役目が重なるため）
 --
 -- 【ライブプレビューの使い方】
---   1. CurveEditor2 (表示メニュー) を開く
+--   1. CurveEditor_H (表示メニュー) を開く
 --   2. コードを入力し「Live」チェックをON
---   3. トラックバーの移動スクリプトで カーブエディタ2 を選択
+--   3. トラックバーの移動スクリプトで カーブエディタ_H を選択
 --   → エディタの編集内容がリアルタイムで補間に反映される
 --
 -- 【Live の 3 つのセクションのトラック設定】（v1.10）
@@ -34,7 +34,7 @@
 --              両方 ON = 前半そのまま・後半を折り返したインアウト
 --   時間制御 : 区間ごと の 2 つは区間ごとに、全体で1本 は全体に掛かる
 --
--- 【カーブエディタ2 で使える定数・関数】（CurveEditor2 に入力するコード内）
+-- 【カーブエディタ_H で使える定数・関数】（CurveEditor_H に入力するコード内）
 --
 --   t        : 補間位置（0.0=開始 ～ 1.0=終了）。戻り値は比率（0.0=st / 1.0=ed）
 --   st, ed   : その区間の開始値・終了値（v1.10。加速・減速で折り返したときは入れ替わる）
@@ -71,9 +71,9 @@
 --
 -- ============================================================================
 
-@カーブエディタ2
+@カーブエディタ_H
 --label:HexScript
---information:カーブエディタ2@カーブエディタ2 v1.10 by HexBrowns
+--information:カーブエディタ_H@カーブエディタ_H v1.20 by HexBrowns
 --param:スロット,1
 --speed:0,0
 --timecontrol
@@ -84,7 +84,7 @@
 -- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
 -- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
 -- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
--- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor_H/verify_tra2.py）
 
 local _getpoint = obj.getpoint
 local _n = _getpoint("num")
@@ -98,26 +98,26 @@ _decel = (_decel == true or _decel == 1)
 
 -- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
 -- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
-local _C = CurveEditor2_tra2_cache
+local _C = CurveEditor_H_tra2_cache
 if type(_C) ~= "table" then
   _C = { content = false, fns = {}, errors = {}, error_count = 0 }
-  CurveEditor2_tra2_cache = _C
+  CurveEditor_H_tra2_cache = _C
 end
 
--- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
--- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- CurveEditor_H.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor_H\。プラグインは本体の
 -- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
--- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- （Script\ と Script\CurveEditor_H\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
 -- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
 local _bfile = _C.live_path
 if not _bfile then
-  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor_H\\Live_active.lua"
   local _ok, _sp = pcall(obj.getinfo, "script_path")
   if _ok and type(_sp) == "string" then
     local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
       or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
     if _root then
-      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+      _bfile = _root .. "Plugin\\CurveEditor_H\\Live_active.lua"
     end
   end
   _C.live_path = _bfile
@@ -135,7 +135,7 @@ local function _report(slot, msg)
   if _C.errors[key] or _C.error_count >= 16 then return end
   _C.errors[key] = true
   _C.error_count = _C.error_count + 1
-  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+  print("@error", "[CurveEditor_H] スロット " .. slot .. ": " .. msg)
 end
 
 -- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
@@ -301,7 +301,7 @@ end
 
 -- エラーの行番号を式の中の行に直す
 local function _user_line(msg)
-  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+  return (tostring(msg):gsub("^CurveEditor_H:(%d+):", function(l)
     return (tonumber(l) - _C.prelude_lines) .. " 行目:"
   end))
 end
@@ -325,7 +325,7 @@ local function _get_fn(slot)
   end
   -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
   code = code:gsub("%s+$", "")
-  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor_H")
   if chunk then
     local ok, made = pcall(chunk)
     if ok and type(made) == "function" then
@@ -413,7 +413,7 @@ return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
 
 @区間ごとにスロットを進める
 --label:HexScript
---information:区間ごとにスロットを進める@カーブエディタ2 v1.10 by HexBrowns
+--information:区間ごとにスロットを進める@カーブエディタ_H v1.20 by HexBrowns
 --param:スロット,1
 --speed:0,0
 --timecontrol
@@ -424,7 +424,7 @@ return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
 -- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
 -- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
 -- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
--- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor_H/verify_tra2.py）
 
 local _getpoint = obj.getpoint
 local _n = _getpoint("num")
@@ -438,26 +438,26 @@ _decel = (_decel == true or _decel == 1)
 
 -- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
 -- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
-local _C = CurveEditor2_tra2_cache
+local _C = CurveEditor_H_tra2_cache
 if type(_C) ~= "table" then
   _C = { content = false, fns = {}, errors = {}, error_count = 0 }
-  CurveEditor2_tra2_cache = _C
+  CurveEditor_H_tra2_cache = _C
 end
 
--- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
--- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- CurveEditor_H.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor_H\。プラグインは本体の
 -- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
--- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- （Script\ と Script\CurveEditor_H\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
 -- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
 local _bfile = _C.live_path
 if not _bfile then
-  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor_H\\Live_active.lua"
   local _ok, _sp = pcall(obj.getinfo, "script_path")
   if _ok and type(_sp) == "string" then
     local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
       or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
     if _root then
-      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+      _bfile = _root .. "Plugin\\CurveEditor_H\\Live_active.lua"
     end
   end
   _C.live_path = _bfile
@@ -475,7 +475,7 @@ local function _report(slot, msg)
   if _C.errors[key] or _C.error_count >= 16 then return end
   _C.errors[key] = true
   _C.error_count = _C.error_count + 1
-  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+  print("@error", "[CurveEditor_H] スロット " .. slot .. ": " .. msg)
 end
 
 -- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
@@ -641,7 +641,7 @@ end
 
 -- エラーの行番号を式の中の行に直す
 local function _user_line(msg)
-  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+  return (tostring(msg):gsub("^CurveEditor_H:(%d+):", function(l)
     return (tonumber(l) - _C.prelude_lines) .. " 行目:"
   end))
 end
@@ -665,7 +665,7 @@ local function _get_fn(slot)
   end
   -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
   code = code:gsub("%s+$", "")
-  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor_H")
   if chunk then
     local ok, made = pcall(chunk)
     if ok and type(made) == "function" then
@@ -753,7 +753,7 @@ return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
 
 @全体で1本
 --label:HexScript
---information:全体で1本@カーブエディタ2 v1.10 by HexBrowns
+--information:全体で1本@カーブエディタ_H v1.20 by HexBrowns
 --param:スロット,1
 --speed:0,0
 --timecontrol
@@ -764,7 +764,7 @@ return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
 -- **--param は 1 つのままにすること。** ホストは保存値の数が --param の数と合わないと、
 -- 全部を既定値に戻す（2026-09-17 実機: --param を 2 つにした版で v1.0 の 0|9001 が 0|1,0 に
 -- 書き換わった。検証 CRV-01 / 02）。区間の扱いをセクションで分けているのはこのため。
--- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor2/verify_tra2.py）
+-- Live の 3 つのセクションの本文は _mode の行だけが違う（検証器: AI/scripts/CurveEditor_H/verify_tra2.py）
 
 local _getpoint = obj.getpoint
 local _n = _getpoint("num")
@@ -778,26 +778,26 @@ _decel = (_decel == true or _decel == 1)
 
 -- 評価をまたいで持つキャッシュ（Live ファイルの内容・スロットごとの関数・出したエラー）。
 -- ホストが Lua の状態を残さない場合は毎回作り直しになるだけで、結果は変わらない。
-local _C = CurveEditor2_tra2_cache
+local _C = CurveEditor_H_tra2_cache
 if type(_C) ~= "table" then
   _C = { content = false, fns = {}, errors = {}, error_count = 0 }
-  CurveEditor2_tra2_cache = _C
+  CurveEditor_H_tra2_cache = _C
 end
 
--- CurveEditor2.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
--- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor2\。プラグインは本体の
+-- CurveEditor_H.aux2 が同期する Live ファイル。内容が変わったときだけ式を作り直す。
+-- 置き場所はデータフォルダ（Script と Plugin の親）の Plugin\CurveEditor_H\。プラグインは本体の
 -- データフォルダの下に書くので、ここでもパスを直書きせず obj.getinfo("script_path") から求める
--- （Script\ と Script\CurveEditor2\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
+-- （Script\ と Script\CurveEditor_H\ のどちらが返っても通るように、末尾の Script 以降を落とす）。
 -- 求められないときは既定のデータフォルダ C:\ProgramData\aviutl2 を使う（v1.10 までの直書きと同じ場所）
 local _bfile = _C.live_path
 if not _bfile then
-  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+  _bfile = "C:\\ProgramData\\aviutl2\\Plugin\\CurveEditor_H\\Live_active.lua"
   local _ok, _sp = pcall(obj.getinfo, "script_path")
   if _ok and type(_sp) == "string" then
     local _root = _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/]?$")
       or _sp:match("^(.*[\\/])[Ss][Cc][Rr][Ii][Pp][Tt][\\/][^\\/]+[\\/]?$")
     if _root then
-      _bfile = _root .. "Plugin\\CurveEditor2\\CurveEditor2Live_active.lua"
+      _bfile = _root .. "Plugin\\CurveEditor_H\\Live_active.lua"
     end
   end
   _C.live_path = _bfile
@@ -815,7 +815,7 @@ local function _report(slot, msg)
   if _C.errors[key] or _C.error_count >= 16 then return end
   _C.errors[key] = true
   _C.error_count = _C.error_count + 1
-  print("@error", "[CurveEditor2] スロット " .. slot .. ": " .. msg)
+  print("@error", "[CurveEditor_H] スロット " .. slot .. ": " .. msg)
 end
 
 -- 式は「ヘルパー群 + function(...) 式 end」として 1 回だけコンパイルし、t を引数で渡す。
@@ -981,7 +981,7 @@ end
 
 -- エラーの行番号を式の中の行に直す
 local function _user_line(msg)
-  return (tostring(msg):gsub("^CurveEditor2:(%d+):", function(l)
+  return (tostring(msg):gsub("^CurveEditor_H:(%d+):", function(l)
     return (tonumber(l) - _C.prelude_lines) .. " 行目:"
   end))
 end
@@ -1005,7 +1005,7 @@ local function _get_fn(slot)
   end
   -- 末尾の空行を落としてから閉じる（式の終わりで起きた構文エラーの行番号が、最後の行の次になるように）
   code = code:gsub("%s+$", "")
-  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor2")
+  local chunk, err = load(_PRELUDE .. code .. "\nend", "=CurveEditor_H")
   if chunk then
     local ok, made = pcall(chunk)
     if ok and type(made) == "function" then
@@ -1093,7 +1093,7 @@ return _st + (_ed - _st) * _shaped_ratio(_use, _t, _st, _ed, _idx)
 
 @バウンス
 --label:HexScript
---information:バウンス@カーブエディタ2 v1.10 by HexBrowns
+--information:バウンス@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1108,7 +1108,7 @@ return _st + (_ed - _st) * _b(_t)
 
 @ループバウンス
 --label:HexScript
---information:ループバウンス@カーブエディタ2 v1.10 by HexBrowns
+--information:ループバウンス@カーブエディタ_H v1.20 by HexBrowns
 --param:周期(フレーム),50
 
 -- 跳ねるような動きを一定周期で無限に繰り返す（減衰なし・ループ向き）
@@ -1125,7 +1125,7 @@ return _st + (_ed - _st) * _bounce
 
 @弾性
 --label:HexScript
---information:弾性@カーブエディタ2 v1.10 by HexBrowns
+--information:弾性@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1141,7 +1141,7 @@ return _st + (_ed - _st) * _r
 
 @バック
 --label:HexScript
---information:バック@カーブエディタ2 v1.10 by HexBrowns
+--information:バック@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1152,7 +1152,7 @@ return _st + (_ed - _st) * (t1*t1*((s+1)*t1+s)+1)
 
 @ベジェ
 --label:HexScript
---information:ベジェ@カーブエディタ2 v1.10 by HexBrowns
+--information:ベジェ@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1172,7 +1172,7 @@ return _st + (_ed - _st) * by(s)
 
 @サイン
 --label:HexScript
---information:サイン@カーブエディタ2 v1.10 by HexBrowns
+--information:サイン@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1181,7 +1181,7 @@ return _st + (_ed - _st) * ((1 - math.cos(math.pi * _t)) / 2)
 
 @指数アウト
 --label:HexScript
---information:指数アウト@カーブエディタ2 v1.10 by HexBrowns
+--information:指数アウト@カーブエディタ_H v1.20 by HexBrowns
 
 local _idx, _t = math.modf(obj.getpoint("index"))
 local _st = obj.getpoint(_idx)
@@ -1191,7 +1191,7 @@ return _st + (_ed - _st) * _r
 
 @ステップ
 --label:HexScript
---information:ステップ@カーブエディタ2 v1.10 by HexBrowns
+--information:ステップ@カーブエディタ_H v1.20 by HexBrowns
 --param:段数,8
 
 local _idx, _t = math.modf(obj.getpoint("index"))
@@ -1202,7 +1202,7 @@ return _st + (_ed - _st) * (math.floor(_t * n) / n)
 
 @スプリング
 --label:HexScript
---information:スプリング@カーブエディタ2 v1.10 by HexBrowns
+--information:スプリング@カーブエディタ_H v1.20 by HexBrowns
 --param:減衰比,0.4
 --param:角周波数,10.0
 
@@ -1243,7 +1243,7 @@ return _st + (_ed - _st) * _r
 
 @パーリン揺らぎ
 --label:HexScript
---information:パーリン揺らぎ@カーブエディタ2 v1.10 by HexBrowns
+--information:パーリン揺らぎ@カーブエディタ_H v1.20 by HexBrowns
 --param:オクターブ,3
 --param:周波数,4.0
 

@@ -1,4 +1,4 @@
-//! CurveEditor2 egui UI
+//! CurveEditor_H egui UI
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -700,7 +700,7 @@ impl EditorState {
                 // 書かないと、次に反映・保存するまで別のプロジェクトで最後に書いたカーブで描画・出力される
                 // （issues/20260927_active_live_differs_from_saved_project.md）
                 if let Err(e) = storage::write_active_live(&self.live_slots) {
-                    tracing::warn!("CurveEditor2: active Live 書き出し失敗: {e:#}");
+                    tracing::warn!("CurveEditor_H: active Live 書き出し失敗: {e:#}");
                     self.status_message = format!("Live書出エラー: {e}");
                 }
                 // 以後、この中身から変わったスロットを「外から書かれたもの」とみなす
@@ -709,11 +709,11 @@ impl EditorState {
             Err(e) => {
                 // 前のプロジェクトのスロットを残すと、保存でそれがこのプロジェクトの Live に書かれる。
                 // 空にして、このプロジェクトの Live は書かない（読めなかったファイルを残す）
-                tracing::warn!("CurveEditor2: プロジェクトの Live を読めませんでした。このプロジェクトの Live は書きません: {e:#}");
+                tracing::warn!("CurveEditor_H: プロジェクトの Live を読めませんでした。このプロジェクトの Live は書きません: {e:#}");
                 self.live_slots.clear();
                 self.live_project_write_blocked = true;
                 if let Err(e) = storage::write_active_live(&self.live_slots) {
-                    tracing::warn!("CurveEditor2: active Live 書き出し失敗: {e:#}");
+                    tracing::warn!("CurveEditor_H: active Live 書き出し失敗: {e:#}");
                 }
                 self.live_disk_base = storage::read_active_live();
                 self.status_message = format!("Live読込エラー（このプロジェクトの Live は書きません）: {e}");
@@ -895,7 +895,7 @@ impl EditorState {
     }
 
     /// 使用箇所検索のクエリと、ほかのシーンを読む保存済みファイル。
-    /// 本体を読む部分（`edit_ops::search_current_scene`）は状態のロックの外で呼ぶ（`CurveEditor2App::usage_search_now`）。
+    /// 本体を読む部分（`edit_ops::search_current_scene`）は状態のロックの外で呼ぶ（`CurveEditorHApp::usage_search_now`）。
     pub fn usage_search_plan(&self) -> (search::SearchQuery, Option<std::path::PathBuf>) {
         let query = search::build_search_query(
             &self.preset_name,
@@ -1118,7 +1118,7 @@ fn str_to_segment_kind(s: &str) -> SegmentKind {
     }
 }
 
-pub struct CurveEditor2App {
+pub struct CurveEditorHApp {
     handle: AviUtl2EframeHandle,
     state: SharedState,
     version: String,
@@ -1137,7 +1137,7 @@ pub struct CurveEditor2App {
     last_focus_poll_secs: f64,
 }
 
-impl CurveEditor2App {
+impl CurveEditorHApp {
     fn run_deferred_api_work(&mut self, ctx: &egui::Context) {
         if let Some(tracks) = self.pending_fetched_tracks.take() {
             self.state.write().apply_tracks_fetched(tracks);
@@ -1491,7 +1491,7 @@ impl CurveEditor2App {
     }
 }
 
-impl eframe::App for CurveEditor2App {
+impl eframe::App for CurveEditorHApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.run_deferred_api_work(ui.ctx());
         self.poll_focus_and_auto_fetch(ui.ctx());
@@ -1506,7 +1506,7 @@ impl eframe::App for CurveEditor2App {
             ui.horizontal(|ui| {
                 // 幅が足りないときはタイトルを詰めて、右のトグルを落とさない。
                 if ui.available_width() > 430.0 {
-                    ui.heading("CurveEditor2");
+                    ui.heading("CurveEditor_H");
                 } else {
                     ui.strong("CE2");
                 }
@@ -1650,7 +1650,7 @@ impl eframe::App for CurveEditor2App {
     }
 }
 
-impl CurveEditor2App {
+impl CurveEditorHApp {
     fn render_presets(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("プリセット");
@@ -1826,7 +1826,7 @@ impl CurveEditor2App {
             if layout.compact {
                 ui.label("Lua");
             } else {
-                ui.label("Lua コード (@カーブエディタ2 用)");
+                ui.label("Lua コード (@カーブエディタ_H 用)");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if lua_applyable && ui.button("Luaから反映").clicked() {
@@ -2237,7 +2237,7 @@ impl CurveEditor2App {
                 if ui
                     .button(apply_label)
                     .on_hover_text(
-                        "Live スロットへ反映したうえで、選択トラックの移動方法をカーブエディタ2に設定",
+                        "Live スロットへ反映したうえで、選択トラックの移動方法をカーブエディタ_Hに設定",
                     )
                     .clicked()
                 {

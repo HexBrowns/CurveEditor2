@@ -1,4 +1,4 @@
-//! CurveEditor2 用 Lua セクションファイル読み書き
+//! CurveEditor_H 用 Lua セクションファイル読み書き
 
 use std::collections::HashMap;
 use std::fs;
@@ -85,7 +85,7 @@ fn strip_bom(s: String) -> String {
 }
 
 pub fn plugin_dir() -> PathBuf {
-    config::app_data_path().join("Plugin").join("CurveEditor2")
+    config::app_data_path().join("Plugin").join("CurveEditor_H")
 }
 
 fn legacy_scriptcurve_dir() -> PathBuf {
@@ -93,11 +93,11 @@ fn legacy_scriptcurve_dir() -> PathBuf {
 }
 
 pub fn presets_path() -> PathBuf {
-    plugin_dir().join("CurveEditor2Presets.lua")
+    plugin_dir().join("Presets.lua")
 }
 
 pub fn active_live_path() -> PathBuf {
-    plugin_dir().join("CurveEditor2Live_active.lua")
+    plugin_dir().join("Live_active.lua")
 }
 
 /// プロジェクトと同じフォルダの `{プロジェクト名}.{name}`。
@@ -112,9 +112,9 @@ pub fn per_project_path(project_path: &Path, name: &str) -> PathBuf {
     }
 }
 
-/// プロジェクトごとの Live（`{プロジェクト名}.CurveEditor2Live.lua`）
+/// プロジェクトごとの Live（`{プロジェクト名}.CurveEditor_H.Live.lua`）
 pub fn project_live_path(project_path: &Path) -> PathBuf {
-    per_project_path(project_path, "CurveEditor2Live.lua")
+    per_project_path(project_path, "CurveEditor_H.Live.lua")
 }
 
 /// 以前のフォルダに 1 つの Live。読むだけ（プロジェクトごとの Live が無いときに引き継ぐ）。
@@ -122,8 +122,8 @@ pub fn project_live_path(project_path: &Path) -> PathBuf {
 fn folder_live_path(project_path: &Path) -> PathBuf {
     project_path
         .parent()
-        .map(|p| p.join("CurveEditor2Live.lua"))
-        .unwrap_or_else(|| PathBuf::from("CurveEditor2Live.lua"))
+        .map(|p| p.join("CurveEditor_H.Live.lua"))
+        .unwrap_or_else(|| PathBuf::from("CurveEditor_H.Live.lua"))
 }
 
 fn legacy_presets_path() -> PathBuf {
@@ -270,7 +270,7 @@ pub fn load_live_for_project(project_path: Option<&Path>) -> Result<HashMap<i32,
     Ok(merged)
 }
 
-/// active（`@カーブエディタ2.tra2` が読む唯一のファイル）だけを書く。プロジェクトを読み込んだ直後に呼び、
+/// active（`@カーブエディタ_H.tra2` が読む唯一のファイル）だけを書く。プロジェクトを読み込んだ直後に呼び、
 /// 読み込んだプロジェクトのカーブで描画されるようにする。中身が同じなら書かない（`write_live_slots`）
 pub fn write_active_live(slots: &HashMap<i32, String>) -> Result<()> {
     fs::create_dir_all(plugin_dir())?;
@@ -423,7 +423,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ce2_live_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let project = dir.join("作品.aup2");
-        fs::write(dir.join("CurveEditor2Live.lua"), "@.live.3\nreturn t\n\n@.live.4\nreturn 1 - t\n\n").unwrap();
+        fs::write(dir.join("CurveEditor_H.Live.lua"), "@.live.3\nreturn t\n\n@.live.4\nreturn 1 - t\n\n").unwrap();
         let slots = load_live_for_project(Some(&project)).unwrap();
         let mut keys: Vec<_> = slots.keys().copied().collect();
         keys.sort();
@@ -441,27 +441,27 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let a = dir.join("作品A.aup2");
         let b = dir.join("作品B.aup2");
-        assert_eq!(project_live_path(&a), dir.join("作品A.CurveEditor2Live.lua"));
+        assert_eq!(project_live_path(&a), dir.join("作品A.CurveEditor_H.Live.lua"));
         assert_eq!(
             crate::curve_library::library_file_path(Some(&a)),
-            Some(dir.join("作品A.CurveEditor2Library.json"))
+            Some(dir.join("作品A.CurveEditor_H.Library.json"))
         );
         // 以前の形（フォルダに 1 つ）だけがあるときは、どちらのプロジェクトもそれを引き継ぐ
-        fs::write(dir.join("CurveEditor2Live.lua"), "@.live.1\nreturn t\n\n").unwrap();
-        fs::write(dir.join("CurveEditor2Library.json"), "{\"curves\":{}}").unwrap();
+        fs::write(dir.join("CurveEditor_H.Live.lua"), "@.live.1\nreturn t\n\n").unwrap();
+        fs::write(dir.join("CurveEditor_H.Library.json"), "{\"curves\":{}}").unwrap();
         assert_eq!(load_live_for_project(Some(&a)).unwrap()[&1], "return t\n");
         assert_eq!(
             crate::curve_library::library_file_to_load(Some(&b)),
-            Some(dir.join("CurveEditor2Library.json"))
+            Some(dir.join("CurveEditor_H.Library.json"))
         );
         // A だけがプロジェクトごとの Live を持つと、A はそれを、B は以前のものを読む
         write_live_slots(&project_live_path(&a), &HashMap::from([(1, "return 1 - t\n".to_string())])).unwrap();
         assert_eq!(load_live_for_project(Some(&a)).unwrap()[&1], "return 1 - t\n");
         assert_eq!(load_live_for_project(Some(&b)).unwrap()[&1], "return t\n");
-        fs::write(dir.join("作品B.CurveEditor2Library.json"), "{\"curves\":{}}").unwrap();
+        fs::write(dir.join("作品B.CurveEditor_H.Library.json"), "{\"curves\":{}}").unwrap();
         assert_eq!(
             crate::curve_library::library_file_to_load(Some(&b)),
-            Some(dir.join("作品B.CurveEditor2Library.json"))
+            Some(dir.join("作品B.CurveEditor_H.Library.json"))
         );
         fs::remove_dir_all(&dir).ok();
     }

@@ -129,10 +129,10 @@ impl CurveLibrary {
     }
 }
 
-/// プロジェクトごとのライブラリ（`{プロジェクト名}.CurveEditor2Library.json`）。書くのはこちらだけ。
+/// プロジェクトごとのライブラリ（`{プロジェクト名}.CurveEditor_H.Library.json`）。書くのはこちらだけ。
 /// 以前はフォルダに 1 つで、同じフォルダのプロジェクトどうしで混ざった（`storage::per_project_path`）
 pub fn library_file_path(project_path: Option<&Path>) -> Option<PathBuf> {
-    project_path.map(|p| crate::storage::per_project_path(p, "CurveEditor2Library.json"))
+    project_path.map(|p| crate::storage::per_project_path(p, "CurveEditor_H.Library.json"))
 }
 
 /// 読み込むライブラリのファイル。プロジェクトごとのものが無ければ、フォルダに 1 つの以前のものを引き継ぐ（書かない）
@@ -142,7 +142,7 @@ pub fn library_file_to_load(project_path: Option<&Path>) -> Option<PathBuf> {
     }
     project_path
         .and_then(|p| p.parent())
-        .map(|dir| dir.join("CurveEditor2Library.json"))
+        .map(|dir| dir.join("CurveEditor_H.Library.json"))
         .filter(|p| p.exists())
 }
 
@@ -242,12 +242,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ce2_library_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("p.CurveEditor2Library.json");
+        let path = dir.join("p.CurveEditor_H.Library.json");
         let mut lib = CurveLibrary::default();
         lib.insert(3, CurveDocument::default());
         save_library_file(&path, &lib).unwrap();
         assert_eq!(load_library_file(&path).unwrap().defined_count(), 1);
-        assert!(!dir.join("p.CurveEditor2Library.json.tmp").exists());
+        assert!(!dir.join("p.CurveEditor_H.Library.json.tmp").exists());
         fs::write(&path, "{ broken").unwrap();
         assert!(load_library_file(&path).is_err());
         let dest = backup_broken_file(&path).unwrap();

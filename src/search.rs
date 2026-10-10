@@ -1,4 +1,4 @@
-//! `.aup2` 内の CurveEditor2 使用箇所検索
+//! `.aup2` 内の CurveEditor_H 使用箇所検索
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -7,19 +7,19 @@ use std::path::Path;
 use crate::curves::CurveMode;
 
 /// トラックバー移動方法の表示名（`--label:` / `aviutl2.ini` の Movement 名）。
-pub const MOTION_LABEL: &str = "カーブエディタ2";
+pub const MOTION_LABEL: &str = "カーブエディタ_H";
 
-/// Live スロット連携セクション（`@カーブエディタ2.tra2` の `@カーブエディタ2`）。
-pub const LIVE_SECTION: &str = "カーブエディタ2";
+/// Live スロット連携セクション（`@カーブエディタ_H.tra2` の `@カーブエディタ_H`）。
+pub const LIVE_SECTION: &str = "カーブエディタ_H";
 
 /// ScriptCurve 時代の移動名（検索の後方互換用）。
 pub const LEGACY_MOTION_LABEL: &str = "スクリプトカーブ";
 
-/// `@カーブエディタ2.tra2` に定義された組み込みセクション名。
-/// .tra2 と一致していることを `AI/scripts/CurveEditor2/verify_tra2.py` が確かめる
+/// `@カーブエディタ_H.tra2` に定義された組み込みセクション名。
+/// .tra2 と一致していることを `AI/scripts/CurveEditor_H/verify_tra2.py` が確かめる
 /// （v0.9.1 / .tra2 v1.10 で「加減速」を外した）。
 pub const BUILTIN_SECTIONS: &[&str] = &[
-    "カーブエディタ2",
+    "カーブエディタ_H",
     "バウンス",
     "ループバウンス",
     "弾性",
@@ -32,17 +32,17 @@ pub const BUILTIN_SECTIONS: &[&str] = &[
     "パーリン揺らぎ",
 ];
 
-/// Live スロットを読むほかのセクション（.tra2 v1.10。本文は `@カーブエディタ2` と同じで、区間の扱いだけが違う）。
+/// Live スロットを読むほかのセクション（.tra2 v1.10。本文は `@カーブエディタ_H` と同じで、区間の扱いだけが違う）。
 /// 設定値（スロット）の数を v1.0 のトラックと合わせるため、区間の扱いは設定値ではなくセクションで分けている。
 /// `BUILTIN_SECTIONS` には入れない（あちらは「スロットを使わない組み込み」の一覧）。
 pub const LIVE_VARIANT_SECTIONS: &[&str] = &["区間ごとにスロットを進める", "全体で1本"];
 
-/// Live スロットを読むセクションか（`@カーブエディタ2` と `LIVE_VARIANT_SECTIONS`）。
+/// Live スロットを読むセクションか（`@カーブエディタ_H` と `LIVE_VARIANT_SECTIONS`）。
 pub fn is_live_section(section: &str) -> bool {
     section == LIVE_SECTION || LIVE_VARIANT_SECTIONS.contains(&section)
 }
 
-const SEARCH_TAGS: &[&str] = &["@カーブエディタ2", "@スクリプトカーブ"];
+const SEARCH_TAGS: &[&str] = &["@カーブエディタ_H", "@スクリプトカーブ"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchQuery {
@@ -330,10 +330,10 @@ mod tests {
 
     #[test]
     fn parse_trackline_ce2() {
-        let line = "しぼり=0.00,0.85,カーブエディタ2@カーブエディタ2,0|8";
+        let line = "しぼり=0.00,0.85,カーブエディタ_H@カーブエディタ_H,0|8";
         let (key, sec, slot) = parse_motion_trackline(line).unwrap();
         assert_eq!(key, "しぼり");
-        assert_eq!(sec, "カーブエディタ2");
+        assert_eq!(sec, "カーブエディタ_H");
         assert_eq!(slot, 8);
     }
 
@@ -341,11 +341,11 @@ mod tests {
     #[test]
     fn parse_trackline_ce2_settings() {
         for (line, want_sec, want) in [
-            ("X=0.00,1.00,カーブエディタ2@カーブエディタ2,3|12|0,0.511224,1,0", "カーブエディタ2", 12),
-            ("X=0.00,50.00,1.00,カーブエディタ2@カーブエディタ2,4|3", "カーブエディタ2", 3),
-            ("X=0.00,1.00,カーブエディタ2@カーブエディタ2,0", "カーブエディタ2", 0),
-            ("X=0.00,50.00,1.00,全体で1本@カーブエディタ2,2|8|0,0.5,1,0", "全体で1本", 8),
-            ("X=0.00,50.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|5", "区間ごとにスロットを進める", 5),
+            ("X=0.00,1.00,カーブエディタ_H@カーブエディタ_H,3|12|0,0.511224,1,0", "カーブエディタ_H", 12),
+            ("X=0.00,50.00,1.00,カーブエディタ_H@カーブエディタ_H,4|3", "カーブエディタ_H", 3),
+            ("X=0.00,1.00,カーブエディタ_H@カーブエディタ_H,0", "カーブエディタ_H", 0),
+            ("X=0.00,50.00,1.00,全体で1本@カーブエディタ_H,2|8|0,0.5,1,0", "全体で1本", 8),
+            ("X=0.00,50.00,1.00,区間ごとにスロットを進める@カーブエディタ_H,0|5", "区間ごとにスロットを進める", 5),
         ] {
             let (_, sec, slot) = parse_motion_trackline(line).unwrap();
             assert_eq!(sec, want_sec, "{line}");
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn normalize_motion_section_bracket() {
         assert_eq!(
-            normalize_motion_section("カーブエディタ2[バウンス]"),
+            normalize_motion_section("カーブエディタ_H[バウンス]"),
             "バウンス"
         );
         assert_eq!(
@@ -405,11 +405,11 @@ mod tests {
             "[0]", "layer=0", "frame=0,59",
             "[0.0]", "effect.name=図形",
             "[0.1]", "effect.name=標準描画",
-            "X=0.00,100.00,カーブエディタ2@カーブエディタ2,0|8",
-            "Y=0.00,100.00,カーブエディタ2@カーブエディタ2,0|9",
+            "X=0.00,100.00,カーブエディタ_H@カーブエディタ_H,0|8",
+            "Y=0.00,100.00,カーブエディタ_H@カーブエディタ_H,0|9",
             "[1]", "layer=3", "scene=1", "frame=10,15,20",
             "[1.0]", "effect.name=グレイン@Filters_H",
-            "強度=0.0,50.0,100.0,全体で1本@カーブエディタ2,2|8|0,0.5,1,0",
+            "強度=0.0,50.0,100.0,全体で1本@カーブエディタ_H,2|8|0,0.5,1,0",
             "[2]", "layer=1", "frame=30,40",
             "[2.0]", "effect.name=図形",
             "サイズ=100,200,直線移動,0",
@@ -448,9 +448,9 @@ mod tests {
             "[Object]", "frame=0,59",
             "[Object.0]", "effect.name=図形", "サイズ=100",
             "[Object.1]", "effect.name=グレイン@Filters_H",
-            "強度=0.0,100.0,全体で1本@カーブエディタ2,1|2|0,0.511224,1,0",
+            "強度=0.0,100.0,全体で1本@カーブエディタ_H,1|2|0,0.511224,1,0",
             "[Object.2]", "effect.name=標準描画",
-            "X=0.00,100.00,カーブエディタ2@カーブエディタ2,0|3",
+            "X=0.00,100.00,カーブエディタ_H@カーブエディタ_H,0|3",
             "Y=0.00,100.00,直線移動,0",
         ]
         .join("\r\n");

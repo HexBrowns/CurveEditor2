@@ -11,7 +11,7 @@ use aviutl2::generic::{
 use parking_lot::RwLock;
 
 use crate::curves::CurveMode;
-use crate::motion_registry::{self, MotionRegisterStatus};
+use crate::motion_registry;
 use crate::search::{self, UsageHit, LIVE_SECTION};
 
 pub static EDIT_HANDLE: GlobalEditHandle = GlobalEditHandle::new();
@@ -90,7 +90,7 @@ where
         Ok(result) => result,
         Err(payload) => {
             let msg = panic_payload_message(&*payload);
-            tracing::error!(job, panic = %msg, "CurveEditor2 Edit API panic");
+            tracing::error!(job, panic = %msg, "CurveEditor_H Edit API panic");
             Err(format!("内部エラー(panic): {msg}"))
         }
     }
@@ -102,7 +102,7 @@ pub fn motion_section_for(mode: CurveMode, preset_name: &str, slot: i32) -> (Str
     (query.section, if query.filter_slot { slot } else { 0 })
 }
 
-/// AviUtl2 に登録された移動方法ラベル（`aviutl2.ini` の `[Movement.*]` 形式）。
+/// AviUtl2 に登録された移動方法の名前（トラック値の移動方法の欄の形式。本体が `.tra2` から登録する）。
 pub fn motion_label_for_section(section: &str) -> String {
     motion_registry::motion_ini_key(section)
 }
@@ -177,7 +177,7 @@ pub fn build_motion_track_value(section: &str, slot: i32, existing: Option<&str>
     let base_bits = if ignore_midpoints { BIT_IGNORE_MIDPOINTS } else { 0 };
 
     // 別の移動方法から引き継いだパラメータは捨てる（加減速のビットや設定値の意味が違う）。中間点無視だけは残す。
-    // すでに Live のセクション（`カーブエディタ2` / `区間ごとにスロットを進める` / `全体で1本`）の
+    // すでに Live のセクション（`カーブエディタ_H` / `区間ごとにスロットを進める` / `全体で1本`）の
     // トラックなら、そのセクションのまま設定欄（`加減速|スロット|時間制御`。.tra2 v1.10）の
     // スロットだけを差し替え、利用者が付けた加減速・時間制御を消さない。
     if section == LIVE_SECTION && slot > 0 {
@@ -207,7 +207,7 @@ fn set_bits(param: &str, bits: u32) -> String {
     }
 }
 
-/// Live スロットを読む移動方法か（トラック値に入る `セクション@カーブエディタ2` の形で比べる）。
+/// Live スロットを読む移動方法か（トラック値に入る `セクション@カーブエディタ_H` の形で比べる）。
 fn is_live_motion(motion: &str) -> bool {
     std::iter::once(LIVE_SECTION)
         .chain(search::LIVE_VARIANT_SECTIONS.iter().copied())
@@ -228,7 +228,7 @@ fn split_motion(value: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// カーブエディタ2 の設定欄のスロット（`|` の 2 番目の欄）を差し替える。
+/// カーブエディタ_H の設定欄のスロット（`|` の 2 番目の欄）を差し替える。
 /// 形が想定と違えば None（呼び出し側で `0|スロット` に戻す）。
 ///
 /// **設定値は必ずスロット 1 つだけにする。** .tra2 の `--param` は 1 つで、ホストは保存値の数が
@@ -484,23 +484,17 @@ pub fn apply_to_track(
         && !search::BUILTIN_SECTIONS.iter().any(|s| *s == section)
     {
         return Err(format!(
-            "適用できないセクションです: {section}（カーブエディタ2の組み込みセクションまたは Live スロットのみ対応）"
+            "適用できないセクションです: {section}（カーブエディタ_Hの組み込みセクションまたは Live スロットのみ対応）"
         ));
     }
 
-    match motion_registry::ensure_section_registered(section)
-        .map_err(|e| format!("移動方法の登録に失敗: {e}"))?
-    {
-        MotionRegisterStatus::Present => {}
-        MotionRegisterStatus::Added => {
-            return Err(motion_registry::RESTART_REQUIRED_MESSAGE.into());
-        }
-    }
+    // 登録されていない名前を書くと本体が `not found movement` で編集を打ち切るので、書く前に .tra2 で確かめる
+    motion_registry::ensure_section_registered(section)?;
 
     // 読み取りはキャッシュ済み track_value を使い、edit section 内は set のみ（Undo 汚染を最小化）。
     if parse_track_values(&target.track_value).is_none() {
         return Err(format!(
-            "「{}」は数値トラックではないためカーブエディタ2を適用できません（現在値: {}）",
+            "「{}」は数値トラックではないためカーブエディタ_Hを適用できません（現在値: {}）",
             target.label, target.track_value
         ));
     }
@@ -524,7 +518,7 @@ pub fn apply_to_track(
 
         // `":n"` の解釈がホスト側で確定していないので、書く前に読んで狙いを定める。
         // 第一候補は SDK どおりの「同名エフェクトの何番目か」、
-        // 第二候補はエイリアス上の通し番号（従来 CurveEditor2 が送っていた番号）。
+        // 第二候補はエイリアス上の通し番号（従来 CurveEditor_H が送っていた番号）。
         let mut candidates = vec![effect_index];
         if alias_index != effect_index {
             candidates.push(alias_index);
@@ -745,7 +739,7 @@ effect.name=色調補正@Basic_S
             Some(vec!["0.00".to_string(), "100.00".to_string()])
         );
         assert_eq!(
-            parse_track_values("0.00,100.00,カーブエディタ2@カーブエディタ2,0|3"),
+            parse_track_values("0.00,100.00,カーブエディタ_H@カーブエディタ_H,0|3"),
             Some(vec!["0.00".to_string(), "100.00".to_string()])
         );
         // 中間点つき（値が 3 つ）
@@ -779,19 +773,19 @@ effect.name=色調補正@Basic_S
 
         // 固定値は開始＝終了の 2 値へ広げる（音量調整 の 音量 が通るようになる）
         let v = build_motion_track_value(LIVE_SECTION, 2, Some("100.00"), None);
-        assert_eq!(v, "100.00,100.00,カーブエディタ2@カーブエディタ2,0|2");
+        assert_eq!(v, "100.00,100.00,カーブエディタ_H@カーブエディタ_H,0|2");
 
         // 他の移動方法のパラメータは引き継がない（加減速のビットや設定値の意味が違う）
         let v = build_motion_track_value(LIVE_SECTION, 1, Some("95.00,移動無し,8|10^@min(音量/20-3,2)"), None);
-        assert_eq!(v, "95.00,95.00,カーブエディタ2@カーブエディタ2,0|1");
+        assert_eq!(v, "95.00,95.00,カーブエディタ_H@カーブエディタ_H,0|1");
         let v = build_motion_track_value(LIVE_SECTION, 7, Some("-200.00,0.00,指数関数@Basic_S,2|6"), None);
-        assert_eq!(v, "-200.00,0.00,カーブエディタ2@カーブエディタ2,0|7");
+        assert_eq!(v, "-200.00,0.00,カーブエディタ_H@カーブエディタ_H,0|7");
     }
 
     /// すでに Live のセクションのトラックなら、セクション・加減速・時間制御を残してスロットだけ変える（.tra2 v1.10）。
     #[test]
     fn build_motion_track_value_keeps_live_settings() {
-        let live = "カーブエディタ2@カーブエディタ2";
+        let live = "カーブエディタ_H@カーブエディタ_H";
         // v1.0 の形
         let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,100.00,{live},0|5")), None);
         assert_eq!(v, format!("0.00,100.00,{live},0|7"));
@@ -810,17 +804,17 @@ effect.name=色調補正@Basic_S
         let v = build_motion_track_value(
             LIVE_SECTION,
             9,
-            Some("0.00,50.00,10.00,全体で1本@カーブエディタ2,2|4|0,0.511224,1,0"),
+            Some("0.00,50.00,10.00,全体で1本@カーブエディタ_H,2|4|0,0.511224,1,0"),
             None,
         );
-        assert_eq!(v, "0.00,50.00,10.00,全体で1本@カーブエディタ2,2|9|0,0.511224,1,0");
-        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|1"), None);
-        assert_eq!(v, "0.00,1.00,区間ごとにスロットを進める@カーブエディタ2,0|3");
+        assert_eq!(v, "0.00,50.00,10.00,全体で1本@カーブエディタ_H,2|9|0,0.511224,1,0");
+        let v = build_motion_track_value(LIVE_SECTION, 3, Some("0.00,1.00,区間ごとにスロットを進める@カーブエディタ_H,0|1"), None);
+        assert_eq!(v, "0.00,1.00,区間ごとにスロットを進める@カーブエディタ_H,0|3");
         // 設定値はスロット 1 つだけに揃える（数が合わないとホストが全部を既定値に戻す）
         let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},0|5,1")), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
         // 組み込み（スロットを使わない）セクションからは Live の 0|スロット に切り替える
-        let v = build_motion_track_value(LIVE_SECTION, 7, Some("0.00,1.00,バウンス@カーブエディタ2,0"), None);
+        let v = build_motion_track_value(LIVE_SECTION, 7, Some("0.00,1.00,バウンス@カーブエディタ_H,0"), None);
         assert_eq!(v, format!("0.00,1.00,{live},0|7"));
         // 形が崩れていれば 0|スロット に戻す
         let v = build_motion_track_value(LIVE_SECTION, 7, Some(&format!("0.00,1.00,{live},x|5")), None);
@@ -832,7 +826,7 @@ effect.name=色調補正@Basic_S
     /// 値の数を点の数に合わせる（公開前チェックリストの点検、`issues/20261010_publish_checklist_audit.md`）
     #[test]
     fn build_motion_track_value_matches_points() {
-        let live = "カーブエディタ2@カーブエディタ2";
+        let live = "カーブエディタ_H@カーブエディタ_H";
         // 固定値は点の数だけ並べる（中間点 1 つ = 点 3 つ）
         let v = build_motion_track_value(LIVE_SECTION, 2, Some("100.00"), Some(3));
         assert_eq!(v, format!("100.00,100.00,100.00,{live},0|2"));
@@ -861,8 +855,8 @@ effect.name=色調補正@Basic_S
     #[test]
     fn split_motion_takes_everything_after_motion() {
         assert_eq!(
-            split_motion("0.00,100.00,カーブエディタ2@カーブエディタ2,2|9001|0,0.5,1,0"),
-            Some(("カーブエディタ2@カーブエディタ2", "2|9001|0,0.5,1,0"))
+            split_motion("0.00,100.00,カーブエディタ_H@カーブエディタ_H,2|9001|0,0.5,1,0"),
+            Some(("カーブエディタ_H@カーブエディタ_H", "2|9001|0,0.5,1,0"))
         );
         assert_eq!(split_motion("100.00"), None);
     }

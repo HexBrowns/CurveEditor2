@@ -166,10 +166,10 @@ mod tests {
     #[test]
     fn parse_track_value_motion() {
         let (s, e, m) =
-            parse_track_value("100,200,カーブエディタ2[バウンス]@カーブエディタ2,0").unwrap();
+            parse_track_value("100,200,カーブエディタ_H[バウンス]@カーブエディタ_H,0").unwrap();
         assert!((s - 100.0).abs() < 1e-9);
         assert!((e - 200.0).abs() < 1e-9);
-        assert_eq!(m.as_deref(), Some("カーブエディタ2[バウンス]@カーブエディタ2"));
+        assert_eq!(m.as_deref(), Some("カーブエディタ_H[バウンス]@カーブエディタ_H"));
     }
 
     #[test]

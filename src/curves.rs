@@ -590,10 +590,10 @@ pub fn generate_lua(
         CurveMode::Bezier => generate_bezier_lua(bezier),
         CurveMode::MultiBezier => generate_multi_lua(multi),
         CurveMode::Spring => format!(
-            "-- CurveEditor2: 振動 (spring)\nreturn spring(t, {:.4}, {:.4})",
+            "-- CurveEditor_H: 振動 (spring)\nreturn spring(t, {:.4}, {:.4})",
             spring.zeta, spring.omega
         ),
-        CurveMode::Bounce => "-- CurveEditor2: バウンス\nreturn bounce(t)".to_string(),
+        CurveMode::Bounce => "-- CurveEditor_H: バウンス\nreturn bounce(t)".to_string(),
         CurveMode::Composite => generate_composite_lua(composite),
         CurveMode::Script => {
             let trimmed = script.trim();
@@ -613,13 +613,13 @@ fn generate_bezier_lua(bezier: &BezierParams) -> String {
     // y0==y3 でも制御点で弧を描けるため、dy≈0 で定値に短絡してはならない。
     if y0_default && y3_default {
         return format!(
-            "-- CurveEditor2: ベジェ\nreturn bezier(t, {:.4}, {:.4}, {:.4}, {:.4})",
+            "-- CurveEditor_H: ベジェ\nreturn bezier(t, {:.4}, {:.4}, {:.4}, {:.4})",
             bezier.x1, bezier.y1, bezier.x2, bezier.y2
         );
     }
     // 絶対座標の三次ベジェ（X を二分木探索 → Y）。eval_bezier と同型。
     format!(
-        r#"-- CurveEditor2: ベジェ
+        r#"-- CurveEditor_H: ベジェ
 local x1, y1, x2, y2 = {x1:.4}, {y1:.4}, {x2:.4}, {y2:.4}
 local y0, y3 = {y0:.4}, {y3:.4}
 if t < 0 then t = 0 elseif t > 1 then t = 1 end
@@ -653,7 +653,7 @@ fn generate_composite_lua(c: &CompositeCurve) -> String {
         return "return t".to_string();
     }
     let mut lines = vec![
-        "-- CurveEditor2: 標準(複合)".to_string(),
+        "-- CurveEditor_H: 標準(複合)".to_string(),
         "local anchors = {".to_string(),
     ];
     for a in &c.anchors {
@@ -705,7 +705,7 @@ fn generate_multi_lua(anchors: &[Anchor]) -> String {
         return "return t".to_string();
     }
     let mut lines = vec![
-        "-- CurveEditor2: マルチベジェ".to_string(),
+        "-- CurveEditor_H: マルチベジェ".to_string(),
         "local anchors = {".to_string(),
     ];
     for a in anchors {
@@ -783,7 +783,7 @@ impl ScriptPreview {
     }
 }
 
-/// 既知の CurveEditor2 生成形式を検出し、近似プレビュー用データを返す。
+/// 既知の CurveEditor_H 生成形式を検出し、近似プレビュー用データを返す。
 pub fn detect_script_preview(code: &str) -> Option<ScriptPreview> {
     // anchors+segs を持つ複合を先に（本文中の bounce(u) 等で誤検出しない）
     if code.contains("local segs") || code.contains("segs =") {

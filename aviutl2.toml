@@ -6,18 +6,18 @@
 # 移動方法（.tra2）の正本は assets/。
 
 [project]
-id = "HexBrowns.CurveEditor2"
-name = "CurveEditor2"
-version = "0.9.11"
+id = "HexBrowns.CurveEditor_H"
+name = "CurveEditor_H"
+version = "0.10.0"
 
-[artifacts."CurveEditor2.aux2"]
+[artifacts."CurveEditor_H.aux2"]
 build = "cargo build --release"
-source = "target/release/curve_editor2.dll"
-destination = "Plugin/CurveEditor2/CurveEditor2.aux2"
+source = "target/release/curve_editor_h.dll"
+destination = "Plugin/CurveEditor_H/CurveEditor_H.aux2"
 
-[artifacts."@カーブエディタ2.tra2"]
-source = "assets/@カーブエディタ2.tra2"
-destination = "Script/CurveEditor2/@カーブエディタ2.tra2"
+[artifacts."@カーブエディタ_H.tra2"]
+source = "assets/@カーブエディタ_H.tra2"
+destination = "Script/CurveEditor_H/@カーブエディタ_H.tra2"
 
 [release]
 # インストール時のダイアログに、本体と依存クレートのライセンスを出す
@@ -26,6 +26,6 @@ package_template = "release/package.txt"
 package_information = "{name} v{version} by HexBrowns"
 
 [catalog]
-id = "HexBrowns.CurveEditor2"
+id = "HexBrowns.CurveEditor_H"
 license_path = { type = "MIT", path = "./LICENSE" }
-download_repo = { owner = "HexBrowns", repo = "CurveEditor2" }
+download_repo = { owner = "HexBrowns", repo = "CurveEditor_H" }
