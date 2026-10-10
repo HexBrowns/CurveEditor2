@@ -129,38 +129,6 @@ impl CurveEditor2Plugin {
         self.window_created.store(true, Ordering::Release);
         Ok(())
     }
-
-    fn open_editor(&self) -> AnyResult<()> {
-        self.ensure_window()?;
-        let hwnd = {
-            let guard = self.window.lock();
-            let window = guard
-                .as_ref()
-                .expect("window set after ensure_window");
-            let handle = window.handle()?;
-            let raw = handle
-                .window_handle()
-                .map_err(|e| anyhow::anyhow!("window handle: {e}"))?;
-            match raw.as_raw() {
-                aviutl2::raw_window_handle::RawWindowHandle::Win32(h) => h.hwnd.get() as isize,
-                _ => anyhow::bail!("Win32 以外のウィンドウは未対応"),
-            }
-        };
-        unsafe {
-            use windows::Win32::Foundation::HWND;
-            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SetForegroundWindow, SW_SHOW};
-            let hwnd = HWND(hwnd as _);
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
-        }
-        Ok(())
-    }
-
-    fn open_editor_from_menu() {
-        if let Err(e) = Self::with_instance_mut(|plugin| plugin.open_editor()) {
-            tracing::error!("CurveEditor2 を開けませんでした: {e:#}");
-        }
-    }
 }
 
 impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
@@ -199,7 +167,7 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
             Err(e) => tracing::warn!("CurveEditor2: Movement 登録スキップ: {e:#}"),
         }
         // 表示メニュー／ウィンドウ配置パネル用に register_window_client が必要。
-        // ウィンドウ本体は非表示のまま起動し、表示はメニュー操作時に行う。
+        // ウィンドウ本体は非表示のまま起動し、表示は表示メニューの操作時に本体が行う。
         if let Err(e) = self.ensure_window() {
             tracing::error!("CurveEditor2 ウィンドウ初期化失敗: {e:#}");
         } else {
@@ -215,7 +183,7 @@ impl aviutl2::generic::GenericPlugin for CurveEditor2Plugin {
                 }
             }
         }
-        registry.register_edit_menu("CurveEditor2を開く", Self::open_editor_from_menu);
+        // ウィンドウは表示メニューから開く（メニューから ShowWindow しても開かない。2026-10-10 にユーザーの指摘で外した）
     }
 
     fn event_change_focus_object(&mut self) {
