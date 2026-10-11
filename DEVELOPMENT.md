@@ -59,4 +59,4 @@ Live / プリセットは本体のデータフォルダ（通常は `C:\ProgramD
    **Shift+ドラッグ** でハンドルが交点へスナップ、**Shift+ダブルクリック** で交点にアンカー追加
 9. ベジェ／マルチ／複合の端点 Y をグラフでドラッグ可能。右ドラッグパンは掴み方向に追従
 
-ユーザー向け詳細: [`自作スクリプトマニュアル/CurveEditor_H_Manual.md`](../../自作スクリプトマニュアル/CurveEditor_H_Manual.md)
+ユーザー向け詳細: [`AI/公開情報/CurveEditor_H/CurveEditor_H_Manual.md`](../../公開情報/CurveEditor_H/CurveEditor_H_Manual.md)
